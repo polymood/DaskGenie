@@ -1,8 +1,0 @@
-<div class="card">
-  <div class="legend">
-    {% for worker, color in chart.legend %}
-    <span><span class="swatch" style="background: {{ color }}"></span>{{ worker }}</span>
-    {% endfor %}
-  </div>
-  {{ chart.svg | safe }}
-</div>

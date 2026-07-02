@@ -149,7 +149,6 @@ dependencies = [
 [package.optional-dependencies]
 collector = [
     { name = "fastapi" },
-    { name = "jinja2" },
     { name = "prometheus-client" },
     { name = "uvicorn" },
 ]
@@ -180,7 +179,6 @@ requires-dist = [
     { name = "dask", specifier = ">=2024.1.0" },
     { name = "distributed", marker = "extra == 'demo'", specifier = ">=2024.1.0" },
     { name = "fastapi", marker = "extra == 'collector'", specifier = ">=0.110" },
-    { name = "jinja2", marker = "extra == 'collector'", specifier = ">=3.1" },
     { name = "numpy", marker = "extra == 'demo'", specifier = ">=1.26" },
     { name = "prometheus-client", marker = "extra == 'collector'", specifier = ">=0.20" },
     { name = "pydantic", specifier = ">=2.6" },

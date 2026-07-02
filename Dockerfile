@@ -1,6 +1,5 @@
-# Single always-on container: the collector serves the JSON API, Prometheus
-# /metrics, and the server-rendered dashboard (HTML + inline SVG) on one port.
-# No Node/JS build — the dashboard is plain templates shipped inside the wheel.
+# Collector service: JSON API + Prometheus /metrics + SQLite store. The
+# dashboard is a separate Next.js container (see web/Dockerfile).
 
 FROM python:3.12-slim
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/

@@ -237,3 +237,6 @@ __marimo__/
 *.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
+
+# web/lib is source, not a Python build dir
+!web/lib/

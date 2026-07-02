@@ -20,12 +20,9 @@ def main() -> None:
     )
     parser.add_argument("--host", default=os.environ.get("DASKGENIE_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("DASKGENIE_PORT", "8765")))
-    parser.add_argument(
-        "--no-dashboard", action="store_true", help="Serve the JSON API only, no HTML dashboard"
-    )
     args = parser.parse_args()
 
-    app = create_app(Store(args.db), dashboard=not args.no_dashboard)
+    app = create_app(Store(args.db))
     uvicorn.run(app, host=args.host, port=args.port)
 
 

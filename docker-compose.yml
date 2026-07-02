@@ -1,13 +1,25 @@
-# Always-on DaskGenie collector + dashboard.
+# Always-on DaskGenie: collector (API + metrics + SQLite) and the Next.js
+# dashboard. Point your jobs' collector_url at http://localhost:8765 and open
+# the dashboard at http://localhost:3000.
+#
 #   docker compose up -d --build
-# Then open http://localhost:8765 and point your jobs' collector_url at it.
 services:
-  daskgenie:
+  collector:
     build: .
     ports:
       - "8765:8765"
     volumes:
       - daskgenie-data:/data
+    restart: unless-stopped
+
+  web:
+    build: ./web
+    environment:
+      - COLLECTOR_URL=http://collector:8765
+    ports:
+      - "3000:3000"
+    depends_on:
+      - collector
     restart: unless-stopped
 
 volumes:

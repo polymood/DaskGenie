@@ -18,24 +18,26 @@ Built incrementally, each stage proven before the next is built. See
       in flight on which worker and, on a worker death, records the suspect
       tasks; the collector joins their chunk metadata so `curl /api/deaths`
       answers *"which chunk killed this worker, and what code produced it."*
-- [x] **Dashboard (React SPA) + Docker.** An always-on collector (one Docker
-      container, persistent SQLite volume) that lists every run reported to it
-      and drills into each: a post-mortem view (dead worker → suspect task →
-      source line → chunk held) and a per-worker memory timeline.
-- [ ] Next: aligned execution-ordered view and graph heatmap; on-demand
-      single-task memray; TimescaleDB backend.
+- [x] **Dashboard (Next.js) + Docker.** A standalone dashboard (light theme)
+      over the collector API: runs list, per-run overview, post-mortem with
+      syntax-highlighted source, memory timeline, and the task-graph DAG.
+      `docker compose up` runs collector + dashboard, persisted on a volume.
+- [ ] Next: scheduler-agnostic profiling (threaded/synchronous schedulers),
+      aligned execution-ordered view, memory flamegraphs, example scripts.
 
 ## The dashboard (always-on, via Docker)
 
-Run one container — the collector API, Prometheus `/metrics`, and the React
-dashboard, all on port 8765, with runs persisted to a Docker volume:
+Two services — the **collector** (JSON API + Prometheus `/metrics` + SQLite,
+port 8765) and the **Next.js dashboard** (port 3000) — both persisted and
+restart-on-failure:
 
 ```bash
-docker compose up -d --build      # open http://localhost:8765
+docker compose up -d --build
+# dashboard → http://localhost:3000      collector API → http://localhost:8765
 ```
 
-Then point any job at it and profile — each `register()` call opens a **run**
-that shows up in the dashboard's sidebar:
+Then point any job at the collector and profile — each `register()` opens a
+**run** that appears on the dashboard:
 
 ```python
 from distributed import Client, LocalCluster
@@ -51,21 +53,25 @@ genie.upload_graph("http://localhost:8765", run_id, source_map)
 result.compute()
 ```
 
-The dashboard lists every run (with worker/sample/death counts, and a delete
-button for easy cleanup). Open a run for:
+The dashboard lists every run (worker/sample/death counts, one-click delete).
+Open a run for:
 
-- **Post-mortem** — each worker death: the suspect task, its source line, and
-  the chunk it was holding (e.g. `(4000, 4000) float64 = 128 MB`).
-- **Memory timeline** — per-worker RSS over the run.
+- **Overview** — headline stats and the memory-over-time chart.
+- **Post-mortem** — each worker death: suspect task, source line (syntax
+  highlighted), and the chunk it was holding (`(4000, 4000) float64 = 128 MB`).
+- **Memory** — per-worker RSS timeline.
+- **Task graph** — the layer DAG, with nodes that were in flight at a death
+  highlighted.
 
 ### Developing the dashboard
 
-The SPA lives in `web/` (React + TypeScript + Vite). In dev, run the collector
-and Vite separately (Vite proxies `/api` to the collector):
+The dashboard is a Next.js (App Router, TypeScript) app in `web/`. Run the
+collector and the dev server separately; the dashboard proxies `/api` to the
+collector (`COLLECTOR_URL`, default `http://127.0.0.1:8765`):
 
 ```bash
-uv run python -m daskgenie.collector --port 8765      # terminal 1
-cd web && npm install && npm run dev                  # terminal 2 → http://localhost:5173
+uv run python -m daskgenie.collector --port 8765          # terminal 1
+cd web && npm install && npm run dev                      # terminal 2 → http://localhost:3000
 ```
 
 ## Quickstart (GraphCapture)

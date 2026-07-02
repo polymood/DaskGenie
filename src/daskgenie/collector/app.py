@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
@@ -20,7 +21,6 @@ from prometheus_client import (
     generate_latest,
 )
 
-from daskgenie.collector.html import register_html
 from daskgenie.collector.store import Store
 from daskgenie.common.schemas import (
     SCHEMA_VERSION,
@@ -32,8 +32,16 @@ from daskgenie.common.schemas import (
 )
 
 
-def create_app(store: Store | None = None, *, dashboard: bool = True) -> FastAPI:
+def create_app(store: Store | None = None) -> FastAPI:
     app = FastAPI(title="DaskGenie Collector", version="0.1.0")
+    # The dashboard is a separate Next.js app, so allow it to call the API from
+    # its own origin during local dev / split deployments.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     store = store or Store()
 
     # A private registry (not the global default) so repeated create_app calls
@@ -143,11 +151,5 @@ def create_app(store: Store | None = None, *, dashboard: bool = True) -> FastAPI
     @app.get("/api/runs/{run_id}/deaths")
     def deaths(run_id: str) -> list[dict[str, Any]]:
         return store.deaths(run_id)
-
-    # Server-rendered dashboard (HTML pages + inline SVG). Registered after the
-    # JSON API so /api, /ingest, /metrics keep priority. Disable for a headless,
-    # API-only collector.
-    if dashboard:
-        register_html(app, store)
 
     return app

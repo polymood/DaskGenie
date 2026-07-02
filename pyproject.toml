@@ -13,7 +13,6 @@ collector = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "prometheus-client>=0.20",
-    "jinja2>=3.1",
 ]
 demo = [
     "distributed>=2024.1.0",
@@ -41,12 +40,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/daskgenie"]
-# Ship the server-rendered templates + CSS inside the wheel so the collector
-# serves the dashboard when pip-installed (e.g. in the Docker image).
-artifacts = [
-    "src/daskgenie/collector/templates/*.html",
-    "src/daskgenie/collector/static/*",
-]
 
 [tool.ruff]
 line-length = 100
