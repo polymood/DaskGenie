@@ -1,0 +1,14 @@
+# Always-on DaskGenie collector + dashboard.
+#   docker compose up -d --build
+# Then open http://localhost:8765 and point your jobs' collector_url at it.
+services:
+  daskgenie:
+    build: .
+    ports:
+      - "8765:8765"
+    volumes:
+      - daskgenie-data:/data
+    restart: unless-stopped
+
+volumes:
+  daskgenie-data:

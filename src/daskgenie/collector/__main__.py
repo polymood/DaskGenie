@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 import uvicorn
 
@@ -12,12 +13,21 @@ from daskgenie.collector.store import Store
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="DaskGenie collector service")
-    parser.add_argument("--db", default="daskgenie.db", help="SQLite file (or :memory:)")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--db",
+        default=os.environ.get("DASKGENIE_DB", "daskgenie.db"),
+        help="SQLite file (or :memory:)",
+    )
+    parser.add_argument("--host", default=os.environ.get("DASKGENIE_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("DASKGENIE_PORT", "8765")))
+    parser.add_argument(
+        "--static-dir",
+        default=os.environ.get("DASKGENIE_STATIC_DIR"),
+        help="Directory of the built SPA to serve (optional)",
+    )
     args = parser.parse_args()
 
-    app = create_app(Store(args.db))
+    app = create_app(Store(args.db), static_dir=args.static_dir)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

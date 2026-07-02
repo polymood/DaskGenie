@@ -9,9 +9,12 @@ stale plugin can't quietly corrupt the store.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.staticfiles import StaticFiles
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
@@ -31,9 +34,10 @@ from daskgenie.common.schemas import (
 )
 
 
-def create_app(store: Store | None = None) -> FastAPI:
+def create_app(store: Store | None = None, static_dir: str | Path | None = None) -> FastAPI:
     app = FastAPI(title="DaskGenie Collector", version="0.1.0")
     store = store or Store()
+    static_dir = static_dir or os.environ.get("DASKGENIE_STATIC_DIR")
 
     # A private registry (not the global default) so repeated create_app calls
     # in tests don't raise "Duplicated timeseries" on re-registration.
@@ -142,5 +146,11 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.get("/api/runs/{run_id}/deaths")
     def deaths(run_id: str) -> list[dict[str, Any]]:
         return store.deaths(run_id)
+
+    # Serve the built SPA (if present) as a catch-all *after* the API routes, so
+    # /api, /ingest, /metrics win and any other path falls through to index.html
+    # for client-side routing. Absent in dev (Vite serves the SPA) and in tests.
+    if static_dir and Path(static_dir).is_dir():
+        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="spa")
 
     return app

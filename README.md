@@ -18,8 +18,55 @@ Built incrementally, each stage proven before the next is built. See
       in flight on which worker and, on a worker death, records the suspect
       tasks; the collector joins their chunk metadata so `curl /api/deaths`
       answers *"which chunk killed this worker, and what code produced it."*
-- [ ] React UI (post-mortem view, aligned execution-ordered view, graph
-      heatmap).
+- [x] **Dashboard (React SPA) + Docker.** An always-on collector (one Docker
+      container, persistent SQLite volume) that lists every run reported to it
+      and drills into each: a post-mortem view (dead worker → suspect task →
+      source line → chunk held) and a per-worker memory timeline.
+- [ ] Next: aligned execution-ordered view and graph heatmap; on-demand
+      single-task memray; TimescaleDB backend.
+
+## The dashboard (always-on, via Docker)
+
+Run one container — the collector API, Prometheus `/metrics`, and the React
+dashboard, all on port 8765, with runs persisted to a Docker volume:
+
+```bash
+docker compose up -d --build      # open http://localhost:8765
+```
+
+Then point any job at it and profile — each `register()` call opens a **run**
+that shows up in the dashboard's sidebar:
+
+```python
+from distributed import Client, LocalCluster
+import daskgenie as dg
+import daskgenie.client as genie
+
+client = Client(LocalCluster(processes=True))
+run_id = genie.register(client, "http://localhost:8765", run_name="nightly ETL")
+
+with dg.track() as source_map:
+    result = build_pipeline()
+genie.upload_graph("http://localhost:8765", run_id, source_map)
+result.compute()
+```
+
+The dashboard lists every run (with worker/sample/death counts, and a delete
+button for easy cleanup). Open a run for:
+
+- **Post-mortem** — each worker death: the suspect task, its source line, and
+  the chunk it was holding (e.g. `(4000, 4000) float64 = 128 MB`).
+- **Memory timeline** — per-worker RSS over the run.
+
+### Developing the dashboard
+
+The SPA lives in `web/` (React + TypeScript + Vite). In dev, run the collector
+and Vite separately (Vite proxies `/api` to the collector):
+
+```bash
+uv run python -m daskgenie.collector --port 8765      # terminal 1
+cd web && npm install && npm run dev                  # terminal 2 → http://localhost:5173
+```
 
 ## Quickstart (GraphCapture)
 
