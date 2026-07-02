@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import type { DeathEvent, GraphData, RunInfo, Sample } from "./types";
+import type { ChunkMeta, DeathEvent, GraphData, RunInfo, Sample } from "./types";
 
 const fetcher = async (url: string) => {
   const res = await fetch(url);
@@ -30,6 +30,13 @@ export function useTimeline(id: string) {
 
 export function useGraph(id: string) {
   return useSWR<GraphData>(`/api/runs/${id}/graph`, fetcher);
+}
+
+export function useChunks(id: string, key: string | null) {
+  return useSWR<ChunkMeta[]>(
+    key ? `/api/runs/${id}/chunks/${encodeURIComponent(key)}` : null,
+    fetcher,
+  );
 }
 
 export async function deleteRun(id: string): Promise<void> {

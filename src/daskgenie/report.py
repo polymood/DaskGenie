@@ -9,8 +9,8 @@ import json
 import urllib.request
 from collections.abc import Mapping, Sequence
 
-from daskgenie.common.schemas import GraphLayer, GraphUpload, SampleBatch
-from daskgenie.graphcapture import GraphInfo, SourceLocation
+from daskgenie.common.schemas import GraphLayer, GraphNode, GraphUpload, SampleBatch
+from daskgenie.graphcapture import SourceLocation, extract_graph, extract_task_graph
 
 
 def _post(url: str, payload: bytes, *, timeout: float = 10.0) -> bytes:
@@ -43,9 +43,12 @@ def upload_graph(
     collector_url: str,
     run_id: str,
     layer_map: Mapping[str, SourceLocation],
-    graph_info: GraphInfo | None = None,
+    collection: object | None = None,
 ) -> None:
-    """Push the ``layer -> source`` map (and optional dependency edges) to a run."""
+    """Push the ``layer -> source`` map to a run. If ``collection`` (the final
+    Dask object) is given, also extract and push the concrete task graph —
+    every task node and dependency edge — so the dashboard can draw it.
+    """
     layers = [
         GraphLayer(
             layer=name,
@@ -55,12 +58,29 @@ def upload_graph(
         )
         for name, loc in layer_map.items()
     ]
-    deps: dict[str, list[str]] = (
-        {layer: sorted(d) for layer, d in graph_info.layer_dependencies.items()}
-        if graph_info is not None
-        else {}
+    deps: dict[str, list[str]] = {}
+    nodes: list[GraphNode] = []
+    edges: list[tuple[str, str]] = []
+    task_count = 0
+    truncated = False
+    if collection is not None:
+        info = extract_graph(collection)
+        deps = {layer: sorted(d) for layer, d in info.layer_dependencies.items()}
+        tg = extract_task_graph(collection)
+        nodes = [GraphNode(key=k, layer=layer) for k, layer in tg.nodes]
+        edges = tg.edges
+        task_count = tg.task_count
+        truncated = tg.truncated
+
+    upload = GraphUpload(
+        run_id=run_id,
+        layers=layers,
+        layer_dependencies=deps,
+        nodes=nodes,
+        edges=edges,
+        task_count=task_count,
+        truncated=truncated,
     )
-    upload = GraphUpload(run_id=run_id, layers=layers, layer_dependencies=deps)
     _post(f"{collector_url.rstrip('/')}/ingest/graph", upload.model_dump_json().encode("utf-8"))
 
 

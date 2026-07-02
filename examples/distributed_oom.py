@@ -43,7 +43,7 @@ def main() -> None:
             x = client.persist(da.ones((8000, 8000), chunks=(4000, 4000)))
             wait(x)
             result = x.map_blocks(blowup, dtype="float64").sum()
-        dg.upload_graph(COLLECTOR, run_id, source_map)
+        dg.upload_graph(COLLECTOR, run_id, source_map, collection=result)
 
         print("running a pipeline that will OOM a worker...")
         try:

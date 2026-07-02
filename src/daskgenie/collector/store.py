@@ -79,6 +79,26 @@ CREATE TABLE IF NOT EXISTS graph_deps (
     dep TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS graph_nodes (
+    run_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    layer TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gnodes_run ON graph_nodes(run_id);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+    run_id TEXT NOT NULL,
+    src TEXT NOT NULL,
+    dst TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gedges_run ON graph_edges(run_id);
+
+CREATE TABLE IF NOT EXISTS graph_meta (
+    run_id TEXT PRIMARY KEY,
+    task_count INTEGER NOT NULL,
+    truncated INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS deaths (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
@@ -173,7 +193,16 @@ class Store:
     def delete_run(self, run_id: str) -> bool:
         with self._lock:
             cur = self._conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
-            for table in ("samples", "chunks", "graph_layers", "graph_deps", "deaths"):
+            for table in (
+                "samples",
+                "chunks",
+                "graph_layers",
+                "graph_deps",
+                "graph_nodes",
+                "graph_edges",
+                "graph_meta",
+                "deaths",
+            ):
                 self._conn.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))  # noqa: S608
             self._conn.commit()
         return cur.rowcount > 0
@@ -232,6 +261,24 @@ class Store:
                     for dep in deps
                 ],
             )
+            # Replace any previously-uploaded task graph for this run.
+            if upload.nodes or upload.edges or upload.task_count:
+                self._conn.execute("DELETE FROM graph_nodes WHERE run_id = ?", (upload.run_id,))
+                self._conn.execute("DELETE FROM graph_edges WHERE run_id = ?", (upload.run_id,))
+                self._conn.executemany(
+                    "INSERT INTO graph_nodes (run_id, key, layer) VALUES (?, ?, ?)",
+                    [(upload.run_id, n.key, n.layer) for n in upload.nodes],
+                )
+                self._conn.executemany(
+                    "INSERT INTO graph_edges (run_id, src, dst) VALUES (?, ?, ?)",
+                    [(upload.run_id, src, dst) for src, dst in upload.edges],
+                )
+                self._conn.execute(
+                    "INSERT INTO graph_meta (run_id, task_count, truncated) VALUES (?, ?, ?) "
+                    "ON CONFLICT(run_id) DO UPDATE SET task_count=excluded.task_count, "
+                    "truncated=excluded.truncated",
+                    (upload.run_id, upload.task_count, int(upload.truncated)),
+                )
             self._conn.commit()
 
     def add_death(self, event: DeathEvent) -> None:
@@ -308,6 +355,15 @@ class Store:
                 "SELECT layer, dep FROM graph_deps WHERE run_id = ?",
                 (run_id,),
             ).fetchall()
+            gnodes = self._conn.execute(
+                "SELECT key, layer FROM graph_nodes WHERE run_id = ?", (run_id,)
+            ).fetchall()
+            gedges = self._conn.execute(
+                "SELECT src, dst FROM graph_edges WHERE run_id = ?", (run_id,)
+            ).fetchall()
+            meta = self._conn.execute(
+                "SELECT task_count, truncated FROM graph_meta WHERE run_id = ?", (run_id,)
+            ).fetchone()
         dep_map: dict[str, list[str]] = {}
         for d in deps:
             dep_map.setdefault(d["layer"], []).append(d["dep"])
@@ -315,6 +371,10 @@ class Store:
             "run_id": run_id,
             "layers": [dict(r) for r in layers],
             "layer_dependencies": dep_map,
+            "nodes": [{"key": n["key"], "layer": n["layer"]} for n in gnodes],
+            "edges": [[e["src"], e["dst"]] for e in gedges],
+            "task_count": meta["task_count"] if meta else 0,
+            "truncated": bool(meta["truncated"]) if meta else False,
         }
 
     def deaths(self, run_id: str) -> list[dict[str, Any]]:

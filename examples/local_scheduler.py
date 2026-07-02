@@ -32,6 +32,7 @@ def main() -> None:
         COLLECTOR,
         run_name=f"{SCHEDULER} matmul",
         source_map=source_map,
+        collection=result,
         sample_interval=0.05,
     ) as prof:
         value = result.compute(scheduler=SCHEDULER)

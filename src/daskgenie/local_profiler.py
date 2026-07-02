@@ -21,7 +21,7 @@ Usage::
         result = build_pipeline()                      # your dask graph
 
     with dg.LocalProfiler("http://localhost:8765", run_name="threaded job",
-                          source_map=source_map) as prof:
+                          source_map=source_map, collection=result) as prof:
         result.compute(scheduler="threads")
     # prof.run_id identifies the run in the dashboard
 """
@@ -41,7 +41,7 @@ from dask.callbacks import Callback
 from daskgenie import report
 from daskgenie.common.arrays import describe_array, key_str
 from daskgenie.common.schemas import ChunkMeta, MemorySample, SampleBatch
-from daskgenie.graphcapture import GraphInfo, SourceLocation
+from daskgenie.graphcapture import SourceLocation
 
 logger = logging.getLogger("daskgenie.local_profiler")
 
@@ -56,7 +56,7 @@ class LocalProfiler(Callback):
         run_name: str = "",
         run_id: str | None = None,
         source_map: Mapping[str, SourceLocation] | None = None,
-        graph_info: GraphInfo | None = None,
+        collection: object | None = None,
         sample_interval: float = 0.1,
         worker_label: str | None = None,
     ) -> None:
@@ -64,7 +64,7 @@ class LocalProfiler(Callback):
         self.collector_url = collector_url.rstrip("/")
         self.sample_interval = sample_interval
         self.source_map = source_map
-        self.graph_info = graph_info
+        self.collection = collection
         # One process, so one "worker" line on the memory chart. Default label
         # names the process so multiple hosts stay distinguishable.
         self.worker_label = worker_label or f"local-pid-{os.getpid()}"
@@ -95,7 +95,7 @@ class LocalProfiler(Callback):
             self._flush()
             if self.source_map is not None:
                 report.upload_graph(
-                    self.collector_url, self.run_id, self.source_map, self.graph_info
+                    self.collector_url, self.run_id, self.source_map, self.collection
                 )
         finally:
             super().__exit__(*exc)  # type: ignore[no-untyped-call]  # unregister hooks

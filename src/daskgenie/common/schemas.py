@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field
 # Bump on any breaking change to the models below. The collector compares this
 # against the value carried on incoming payloads.
 # v2: introduced the first-class "run" — every payload now carries a run_id.
-SCHEMA_VERSION = 2
+# v3: GraphUpload carries the full task graph (nodes/edges/task_count).
+SCHEMA_VERSION = 3
 
 
 class ChunkMeta(BaseModel):
@@ -57,13 +58,28 @@ class GraphLayer(BaseModel):
     code_snippet: str
 
 
+class GraphNode(BaseModel):
+    """One task node in the concrete task graph. ``layer`` joins to the source
+    map; ``key`` is the exact Dask task key.
+    """
+
+    key: str
+    layer: str
+
+
 class GraphUpload(BaseModel):
-    """The layer -> source map plus layer dependency edges for one run."""
+    """The layer -> source map, layer dependency edges, and (optionally) the
+    full task-level graph for one run.
+    """
 
     schema_version: int = Field(default=SCHEMA_VERSION)
     run_id: str
     layers: list[GraphLayer] = Field(default_factory=list)
     layer_dependencies: dict[str, list[str]] = Field(default_factory=dict)
+    nodes: list[GraphNode] = Field(default_factory=list)
+    edges: list[tuple[str, str]] = Field(default_factory=list)
+    task_count: int = 0
+    truncated: bool = False
 
 
 class DeathEvent(BaseModel):

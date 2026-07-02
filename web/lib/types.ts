@@ -38,8 +38,17 @@ export interface GraphLayer {
   code_snippet: string;
 }
 
+export interface GraphNode {
+  key: string;
+  layer: string;
+}
+
 export interface GraphData {
   run_id: string;
   layers: GraphLayer[];
   layer_dependencies: Record<string, string[]>;
+  nodes: GraphNode[];
+  edges: [string, string][];
+  task_count: number;
+  truncated: boolean;
 }
