@@ -60,6 +60,7 @@ class MemoryProfilerPlugin(WorkerPlugin):
     def __init__(
         self,
         collector_url: str,
+        run_id: str,
         *,
         sample_interval: float = 0.2,
         flush_interval: float = 2.0,
@@ -69,6 +70,7 @@ class MemoryProfilerPlugin(WorkerPlugin):
         # worker, so it must not hold locks/threads/deques (they aren't
         # picklable). All runtime state is created in setup(), on the worker.
         self.collector_url = collector_url.rstrip("/")
+        self.run_id = run_id
         self.sample_interval = sample_interval
         self.flush_interval = flush_interval
         self.http_timeout = http_timeout
@@ -165,6 +167,7 @@ class MemoryProfilerPlugin(WorkerPlugin):
             if not self._samples and not self._chunks:
                 return None
             batch = SampleBatch(
+                run_id=self.run_id,
                 worker=worker.address,
                 samples=list(self._samples),
                 chunks=list(self._chunks),

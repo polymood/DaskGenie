@@ -79,14 +79,10 @@ def test_worker_oom_names_suspect_task_and_chunk() -> None:
             ) as cluster,
             Client(cluster) as client,
         ):
-            # fast flush so chunk metadata escapes before the worker dies
-            from daskgenie.scheduler_plugin import DeathAttributionPlugin
-            from daskgenie.worker_plugin import MemoryProfilerPlugin
+            import daskgenie.client as genie
 
-            client.register_plugin(
-                MemoryProfilerPlugin(url, sample_interval=0.05, flush_interval=0.1)
-            )
-            client.register_plugin(DeathAttributionPlugin(url))
+            # fast flush so chunk metadata escapes before the worker dies
+            run_id = genie.register(client, url, sample_interval=0.05, flush_interval=0.1)
             time.sleep(0.5)
 
             # Persist the input first so the OOMing task has a *materialized*
@@ -100,7 +96,7 @@ def test_worker_oom_names_suspect_task_and_chunk() -> None:
                 future.result(timeout=60)
 
         # a suspected-OOM death must have been recorded naming an in-flight task
-        deaths = _poll(store, timeout=15)
+        deaths = _poll(store, run_id, timeout=15)
         assert deaths, "no death event reached the collector"
         oom = [d for d in deaths if d["suspected_oom"] and d["suspect_keys"]]
         assert oom, f"no suspected-OOM death named a suspect task: {deaths}"
@@ -112,11 +108,11 @@ def test_worker_oom_names_suspect_task_and_chunk() -> None:
         )
 
 
-def _poll(store: Store, timeout: float) -> list[dict[str, object]]:
+def _poll(store: Store, run_id: str, timeout: float) -> list[dict[str, object]]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        deaths = store.deaths()
+        deaths = store.deaths(run_id)
         if deaths:
             return deaths
         time.sleep(0.5)
-    return store.deaths()
+    return store.deaths(run_id)

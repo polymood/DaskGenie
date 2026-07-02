@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field
 
 # Bump on any breaking change to the models below. The collector compares this
 # against the value carried on incoming payloads.
-SCHEMA_VERSION = 1
+# v2: introduced the first-class "run" — every payload now carries a run_id.
+SCHEMA_VERSION = 2
 
 
 class ChunkMeta(BaseModel):
@@ -41,6 +42,7 @@ class SampleBatch(BaseModel):
     """A batch of samples + freshly-seen chunk metadata from one worker."""
 
     schema_version: int = Field(default=SCHEMA_VERSION)
+    run_id: str
     worker: str  # worker address, e.g. "tcp://127.0.0.1:39001"
     samples: list[MemorySample] = Field(default_factory=list)
     chunks: list[ChunkMeta] = Field(default_factory=list)
@@ -73,9 +75,29 @@ class DeathEvent(BaseModel):
     """
 
     schema_version: int = Field(default=SCHEMA_VERSION)
+    run_id: str
     timestamp: float
     worker: str
     suspect_keys: list[str] = Field(default_factory=list)
     suspect_chunks: list[ChunkMeta] = Field(default_factory=list)
     suspected_oom: bool = False
     reason: str = ""
+
+
+class RunCreate(BaseModel):
+    """Client request to open a new run."""
+
+    name: str = ""
+
+
+class RunInfo(BaseModel):
+    """A profiling run: one cluster session's worth of data.
+
+    ``counts`` is a small summary (samples/deaths/workers) the dashboard shows
+    in the run list without pulling the full timeline.
+    """
+
+    id: str
+    name: str
+    created_at: float
+    counts: dict[str, int] = Field(default_factory=dict)

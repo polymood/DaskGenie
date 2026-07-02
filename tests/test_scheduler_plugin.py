@@ -27,7 +27,7 @@ class _FakeScheduler:
 
 
 def _plugin(monkeypatch: Any) -> tuple[DeathAttributionPlugin, list[Any]]:
-    plugin = DeathAttributionPlugin("http://collector")
+    plugin = DeathAttributionPlugin("http://collector", "run1")
     posted: list[Any] = []
     # capture the event instead of firing a background HTTP thread
     monkeypatch.setattr(plugin, "_post", posted.append)

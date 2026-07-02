@@ -48,8 +48,8 @@ def build_pipeline(client: Client) -> object:
     return persisted.map_blocks(blowup, dtype="float64").sum()
 
 
-def print_post_mortem(store: Store, source_map: dict[str, dg.SourceLocation]) -> None:
-    deaths = [d for d in store.deaths() if d["suspected_oom"] and d["suspect_keys"]]
+def print_post_mortem(store: Store, run_id: str, source_map: dict[str, dg.SourceLocation]) -> None:
+    deaths = [d for d in store.deaths(run_id) if d["suspected_oom"] and d["suspect_keys"]]
     if not deaths:
         print("No suspected-OOM death recorded (worker may have survived).")
         return
@@ -101,12 +101,14 @@ def main() -> None:
     )
     client = Client(cluster)
     try:
-        genie.register(client, url, sample_interval=0.05, flush_interval=0.1)
+        run_id = genie.register(
+            client, url, run_name="demo OOM", sample_interval=0.05, flush_interval=0.1
+        )
         time.sleep(0.5)
 
         with dg.track() as source_map:
             result = build_pipeline(client)
-        genie.upload_graph(url, "demo-run", source_map)
+        genie.upload_graph(url, run_id, source_map)
 
         print("Running a pipeline that will OOM a worker...")
         future = client.compute(result)
@@ -116,7 +118,7 @@ def main() -> None:
             print(f"job failed as expected: {type(exc).__name__}")
 
         time.sleep(2)  # let the death event flush to the collector
-        print_post_mortem(store, source_map)
+        print_post_mortem(store, run_id, source_map)
     finally:
         client.close()
         cluster.close()

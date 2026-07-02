@@ -14,6 +14,8 @@ from daskgenie.common.schemas import (
     SampleBatch,
 )
 
+RUN = "run1"
+
 
 def _client() -> TestClient:
     return TestClient(create_app(Store(":memory:")))
@@ -22,6 +24,7 @@ def _client() -> TestClient:
 def test_ingest_samples_roundtrips_to_timeline() -> None:
     client = _client()
     batch = SampleBatch(
+        run_id=RUN,
         worker="tcp://w1",
         samples=[
             MemorySample(timestamp=1.0, rss_bytes=100, managed_bytes=40, executing_keys=["a"]),
@@ -33,19 +36,81 @@ def test_ingest_samples_roundtrips_to_timeline() -> None:
     assert resp.status_code == 200
     assert resp.json() == {"samples": 2, "chunks": 1}
 
-    timeline = client.get("/api/timeline", params={"worker": "tcp://w1"}).json()
+    timeline = client.get(f"/api/runs/{RUN}/timeline", params={"worker": "tcp://w1"}).json()
     assert len(timeline) == 2
     assert {row["rss_bytes"] for row in timeline} == {100, 200}
 
-    chunks = client.get("/api/chunks/a").json()
+    chunks = client.get(f"/api/runs/{RUN}/chunks/a").json()
     assert len(chunks) == 1
     assert chunks[0]["nbytes"] == 800
     assert tuple(chunks[0]["shape"]) == (10, 10)
 
 
+def test_ingest_auto_registers_run_and_lists_it() -> None:
+    client = _client()
+    client.post(
+        "/ingest/samples",
+        json=SampleBatch(
+            run_id=RUN,
+            worker="tcp://w1",
+            samples=[MemorySample(timestamp=1.0, rss_bytes=1, managed_bytes=1, executing_keys=[])],
+        ).model_dump(),
+    )
+    runs = client.get("/api/runs").json()
+    assert [r["id"] for r in runs] == [RUN]
+    assert runs[0]["counts"]["samples"] == 1
+    assert runs[0]["counts"]["workers"] == 1
+
+
+def test_create_list_and_delete_run() -> None:
+    client = _client()
+    run = client.post("/api/runs", json={"name": "nightly"}).json()
+    rid = run["id"]
+    assert run["name"] == "nightly"
+
+    assert client.get(f"/api/runs/{rid}").json()["name"] == "nightly"
+    assert rid in [r["id"] for r in client.get("/api/runs").json()]
+
+    assert client.delete(f"/api/runs/{rid}").json() == {"deleted": True}
+    assert client.get(f"/api/runs/{rid}").status_code == 404
+    assert rid not in [r["id"] for r in client.get("/api/runs").json()]
+
+
+def test_delete_run_cascades_data() -> None:
+    client = _client()
+    client.post(
+        "/ingest/samples",
+        json=SampleBatch(
+            run_id=RUN,
+            worker="tcp://w1",
+            samples=[MemorySample(timestamp=1.0, rss_bytes=1, managed_bytes=1, executing_keys=[])],
+        ).model_dump(),
+    )
+    client.delete(f"/api/runs/{RUN}")
+    assert client.get(f"/api/runs/{RUN}/timeline").json() == []
+
+
+def test_runs_are_isolated_from_each_other() -> None:
+    client = _client()
+    for rid, rss in [("A", 111), ("B", 222)]:
+        client.post(
+            "/ingest/samples",
+            json=SampleBatch(
+                run_id=rid,
+                worker="tcp://w1",
+                samples=[
+                    MemorySample(timestamp=1.0, rss_bytes=rss, managed_bytes=0, executing_keys=[])
+                ],
+            ).model_dump(),
+        )
+    a = client.get("/api/runs/A/timeline").json()
+    assert [row["rss_bytes"] for row in a] == [111]
+
+
 def test_metrics_exposes_worker_memory() -> None:
     client = _client()
     batch = SampleBatch(
+        run_id=RUN,
         worker="tcp://w1",
         samples=[MemorySample(timestamp=1.0, rss_bytes=555, managed_bytes=222, executing_keys=[])],
     )
@@ -57,7 +122,7 @@ def test_metrics_exposes_worker_memory() -> None:
 
 def test_schema_version_mismatch_rejected() -> None:
     client = _client()
-    payload = SampleBatch(worker="w").model_dump()
+    payload = SampleBatch(run_id=RUN, worker="w").model_dump()
     payload["schema_version"] = SCHEMA_VERSION + 1
     resp = client.post("/ingest/samples", json=payload)
     assert resp.status_code == 409
@@ -66,12 +131,12 @@ def test_schema_version_mismatch_rejected() -> None:
 def test_graph_upload_and_query() -> None:
     client = _client()
     upload = GraphUpload(
-        run_id="run1",
+        run_id=RUN,
         layers=[GraphLayer(layer="rechunk", filename="p.py", lineno=5, code_snippet="x.rechunk()")],
         layer_dependencies={"rechunk": ["open"]},
     )
     client.post("/ingest/graph", json=upload.model_dump())
-    graph = client.get("/api/graph/run1").json()
+    graph = client.get(f"/api/runs/{RUN}/graph").json()
     assert graph["layers"][0]["layer"] == "rechunk"
     assert graph["layer_dependencies"] == {"rechunk": ["open"]}
 
@@ -79,6 +144,7 @@ def test_graph_upload_and_query() -> None:
 def test_death_event_roundtrip_and_counter() -> None:
     client = _client()
     event = DeathEvent(
+        run_id=RUN,
         timestamp=9.0,
         worker="tcp://w1",
         suspect_keys=["rechunk-merge-1"],
@@ -91,7 +157,7 @@ def test_death_event_roundtrip_and_counter() -> None:
         reason="abrupt disappearance mid-task",
     )
     client.post("/ingest/death", json=event.model_dump())
-    deaths = client.get("/api/deaths").json()
+    deaths = client.get(f"/api/runs/{RUN}/deaths").json()
     assert deaths[0]["suspected_oom"] is True
     assert deaths[0]["suspect_keys"] == ["rechunk-merge-1"]
     assert "daskgenie_worker_deaths_total 1.0" in client.get("/metrics").text
@@ -106,6 +172,7 @@ def test_death_event_is_enriched_with_stored_chunk_metadata() -> None:
     client.post(
         "/ingest/samples",
         json=SampleBatch(
+            run_id=RUN,
             worker="tcp://w1",
             chunks=[
                 ChunkMeta(
@@ -121,10 +188,14 @@ def test_death_event_is_enriched_with_stored_chunk_metadata() -> None:
     client.post(
         "/ingest/death",
         json=DeathEvent(
-            timestamp=1.0, worker="tcp://w1", suspect_keys=["rechunk-merge-1"], suspected_oom=True
+            run_id=RUN,
+            timestamp=1.0,
+            worker="tcp://w1",
+            suspect_keys=["rechunk-merge-1"],
+            suspected_oom=True,
         ).model_dump(),
     )
-    death = client.get("/api/deaths").json()[0]
+    death = client.get(f"/api/runs/{RUN}/deaths").json()[0]
     assert len(death["suspect_chunks"]) == 1
     assert death["suspect_chunks"][0]["nbytes"] == 512_000_000
     assert death["suspect_chunks"][0]["task_key"] == "rechunk-merge-1"

@@ -1,8 +1,12 @@
 """SQLite-backed event store.
 
 SQLite by default keeps the tool self-contained — no server to stand up, one
-file to hand someone. The public methods here are the whole storage contract;
-a TimescaleDB backend (spec stretch goal) would reimplement this same surface.
+file to hand someone (and one Docker volume to persist). The public methods
+here are the whole storage contract; a TimescaleDB backend (spec stretch goal)
+would reimplement this same surface.
+
+Everything is scoped to a ``run`` — one cluster session's worth of data — so
+the dashboard can list runs and drill into each independently.
 
 Concurrency: uvicorn serves requests across a thread pool, so we open the
 connection with ``check_same_thread=False`` and serialise every access through
@@ -16,6 +20,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
+import uuid
 from pathlib import Path
 
 from daskgenie.common.schemas import (
@@ -23,30 +29,39 @@ from daskgenie.common.schemas import (
     DeathEvent,
     GraphUpload,
     MemorySample,
+    RunInfo,
     SampleBatch,
 )
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS runs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS samples (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
     worker TEXT NOT NULL,
     timestamp REAL NOT NULL,
     rss_bytes INTEGER NOT NULL,
     managed_bytes INTEGER NOT NULL,
     executing_keys TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_samples_worker_ts ON samples(worker, timestamp);
+CREATE INDEX IF NOT EXISTS idx_samples_run_worker_ts ON samples(run_id, worker, timestamp);
 
 -- One row per (consuming task, input chunk): a task can hold several inputs,
 -- and worker-side dedup already prevents duplicates, so no unique constraint.
 CREATE TABLE IF NOT EXISTS chunks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
     task_key TEXT NOT NULL,
     shape TEXT NOT NULL,
     dtype TEXT NOT NULL,
     nbytes INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_chunks_task_key ON chunks(task_key);
+CREATE INDEX IF NOT EXISTS idx_chunks_run_task_key ON chunks(run_id, task_key);
 
 CREATE TABLE IF NOT EXISTS graph_layers (
     run_id TEXT NOT NULL,
@@ -65,6 +80,7 @@ CREATE TABLE IF NOT EXISTS graph_deps (
 
 CREATE TABLE IF NOT EXISTS deaths (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
     timestamp REAL NOT NULL,
     worker TEXT NOT NULL,
     suspect_keys TEXT NOT NULL,
@@ -72,6 +88,7 @@ CREATE TABLE IF NOT EXISTS deaths (
     suspected_oom INTEGER NOT NULL,
     reason TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_deaths_run ON deaths(run_id, timestamp);
 """
 
 
@@ -89,15 +106,91 @@ class Store:
         with self._lock:
             self._conn.close()
 
+    # -- runs ---------------------------------------------------------------
+
+    def create_run(self, name: str = "") -> RunInfo:
+        run_id = uuid.uuid4().hex[:12]
+        created = time.time()
+        name = name or f"run-{run_id}"
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO runs (id, name, created_at) VALUES (?, ?, ?)",
+                (run_id, name, created),
+            )
+            self._conn.commit()
+        return RunInfo(id=run_id, name=name, created_at=created)
+
+    def ensure_run(self, run_id: str) -> None:
+        """Create a placeholder run row if data arrives for an unknown run_id.
+
+        Keeps ingest robust if a plugin outlives (or races) the run's creation.
+        """
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO runs (id, name, created_at) VALUES (?, ?, ?)",
+                (run_id, f"run-{run_id}", time.time()),
+            )
+            self._conn.commit()
+
+    def list_runs(self) -> list[RunInfo]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, name, created_at FROM runs ORDER BY created_at DESC"
+            ).fetchall()
+            runs = []
+            for r in rows:
+                counts = {
+                    "samples": self._scalar(
+                        "SELECT COUNT(*) FROM samples WHERE run_id = ?", r["id"]
+                    ),
+                    "deaths": self._scalar("SELECT COUNT(*) FROM deaths WHERE run_id = ?", r["id"]),
+                    "workers": self._scalar(
+                        "SELECT COUNT(DISTINCT worker) FROM samples WHERE run_id = ?", r["id"]
+                    ),
+                }
+                runs.append(
+                    RunInfo(id=r["id"], name=r["name"], created_at=r["created_at"], counts=counts)
+                )
+        return runs
+
+    def get_run(self, run_id: str) -> RunInfo | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT id, name, created_at FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if r is None:
+                return None
+            counts = {
+                "samples": self._scalar("SELECT COUNT(*) FROM samples WHERE run_id = ?", run_id),
+                "deaths": self._scalar("SELECT COUNT(*) FROM deaths WHERE run_id = ?", run_id),
+                "workers": self._scalar(
+                    "SELECT COUNT(DISTINCT worker) FROM samples WHERE run_id = ?", run_id
+                ),
+            }
+        return RunInfo(id=r["id"], name=r["name"], created_at=r["created_at"], counts=counts)
+
+    def delete_run(self, run_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+            for table in ("samples", "chunks", "graph_layers", "graph_deps", "deaths"):
+                self._conn.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))  # noqa: S608
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def _scalar(self, sql: str, *params: object) -> int:
+        # caller holds the lock
+        return int(self._conn.execute(sql, params).fetchone()[0])
+
     # -- ingest -------------------------------------------------------------
 
     def add_samples(self, batch: SampleBatch) -> None:
         with self._lock:
             self._conn.executemany(
-                "INSERT INTO samples (worker, timestamp, rss_bytes, managed_bytes, "
-                "executing_keys) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO samples (run_id, worker, timestamp, rss_bytes, managed_bytes, "
+                "executing_keys) VALUES (?, ?, ?, ?, ?, ?)",
                 [
                     (
+                        batch.run_id,
                         batch.worker,
                         s.timestamp,
                         s.rss_bytes,
@@ -108,8 +201,12 @@ class Store:
                 ],
             )
             self._conn.executemany(
-                "INSERT INTO chunks (task_key, shape, dtype, nbytes) VALUES (?, ?, ?, ?)",
-                [(c.task_key, json.dumps(list(c.shape)), c.dtype, c.nbytes) for c in batch.chunks],
+                "INSERT INTO chunks (run_id, task_key, shape, dtype, nbytes) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (batch.run_id, c.task_key, json.dumps(list(c.shape)), c.dtype, c.nbytes)
+                    for c in batch.chunks
+                ],
             )
             self._conn.commit()
 
@@ -139,9 +236,10 @@ class Store:
     def add_death(self, event: DeathEvent) -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT INTO deaths (timestamp, worker, suspect_keys, suspect_chunks, "
-                "suspected_oom, reason) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO deaths (run_id, timestamp, worker, suspect_keys, suspect_chunks, "
+                "suspected_oom, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
+                    event.run_id,
                     event.timestamp,
                     event.worker,
                     json.dumps(event.suspect_keys),
@@ -152,21 +250,23 @@ class Store:
             )
             self._conn.commit()
 
-    # -- query --------------------------------------------------------------
+    # -- query (all scoped to a run) ---------------------------------------
 
-    def timeline(self, worker: str | None = None, limit: int = 10000) -> list[dict[str, object]]:
+    def timeline(
+        self, run_id: str, worker: str | None = None, limit: int = 10000
+    ) -> list[dict[str, object]]:
         with self._lock:
             if worker is None:
                 rows = self._conn.execute(
                     "SELECT worker, timestamp, rss_bytes, managed_bytes, executing_keys "
-                    "FROM samples ORDER BY timestamp DESC LIMIT ?",
-                    (limit,),
+                    "FROM samples WHERE run_id = ? ORDER BY timestamp DESC LIMIT ?",
+                    (run_id, limit),
                 ).fetchall()
             else:
                 rows = self._conn.execute(
                     "SELECT worker, timestamp, rss_bytes, managed_bytes, executing_keys "
-                    "FROM samples WHERE worker = ? ORDER BY timestamp DESC LIMIT ?",
-                    (worker, limit),
+                    "FROM samples WHERE run_id = ? AND worker = ? ORDER BY timestamp DESC LIMIT ?",
+                    (run_id, worker, limit),
                 ).fetchall()
         return [
             {
@@ -179,13 +279,13 @@ class Store:
             for r in rows
         ]
 
-    def chunks_for(self, task_key: str) -> list[ChunkMeta]:
+    def chunks_for(self, run_id: str, task_key: str) -> list[ChunkMeta]:
         """Every input chunk recorded for a task — one task can hold several."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT task_key, shape, dtype, nbytes FROM chunks WHERE task_key = ? "
-                "ORDER BY nbytes DESC",
-                (task_key,),
+                "SELECT task_key, shape, dtype, nbytes FROM chunks "
+                "WHERE run_id = ? AND task_key = ? ORDER BY nbytes DESC",
+                (run_id, task_key),
             ).fetchall()
         return [
             ChunkMeta(
@@ -216,11 +316,12 @@ class Store:
             "layer_dependencies": dep_map,
         }
 
-    def deaths(self) -> list[dict[str, object]]:
+    def deaths(self, run_id: str) -> list[dict[str, object]]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT timestamp, worker, suspect_keys, suspect_chunks, suspected_oom, "
-                "reason FROM deaths ORDER BY timestamp DESC"
+                "reason FROM deaths WHERE run_id = ? ORDER BY timestamp DESC",
+                (run_id,),
             ).fetchall()
         return [
             {
@@ -235,7 +336,7 @@ class Store:
         ]
 
     def latest_memory_by_worker(self) -> dict[str, MemorySample]:
-        """Most recent sample per worker — feeds the Prometheus gauges."""
+        """Most recent sample per worker across all runs — feeds Prometheus."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT s.worker, s.timestamp, s.rss_bytes, s.managed_bytes, s.executing_keys "

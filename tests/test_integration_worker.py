@@ -67,7 +67,7 @@ def test_worker_plugin_reports_samples_and_chunks() -> None:
             ) as cluster,
             Client(cluster) as client,
         ):
-            dg_client.register(client, url, sample_interval=0.05)
+            run_id = dg_client.register(client, url, sample_interval=0.05)
             time.sleep(0.5)  # let the plugin install on the worker
 
             x = da.random.random((4000, 4000), chunks=(500, 500))
@@ -77,8 +77,8 @@ def test_worker_plugin_reports_samples_and_chunks() -> None:
             # give the plugin a flush cycle to push the tail
             time.sleep(2.5)
 
-        # samples must have landed, tagged to the worker, with non-zero RSS
-        timeline = store.timeline()
+        # samples must have landed, tagged to the run+worker, with non-zero RSS
+        timeline = store.timeline(run_id)
         assert timeline, "no samples reached the collector"
         assert any(row["rss_bytes"] > 0 for row in timeline)
 

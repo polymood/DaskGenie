@@ -42,8 +42,9 @@ _MAX_STIMULI = 128
 class DeathAttributionPlugin(SchedulerPlugin):
     name = "daskgenie-death-attribution"
 
-    def __init__(self, collector_url: str, *, http_timeout: float = 5.0) -> None:
+    def __init__(self, collector_url: str, run_id: str, *, http_timeout: float = 5.0) -> None:
         self.collector_url = collector_url.rstrip("/")
+        self.run_id = run_id
         self.http_timeout = http_timeout
         # worker address -> set of task keys currently processing there.
         self._processing: dict[str, set[str]] = {}
@@ -136,6 +137,7 @@ class DeathAttributionPlugin(SchedulerPlugin):
         else:
             reason = f"removal with no task in flight (stimulus={stimulus_id})"
         event = DeathEvent(
+            run_id=self.run_id,
             timestamp=time.time(),
             worker=worker,
             suspect_keys=suspects_sorted,

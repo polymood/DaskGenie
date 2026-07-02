@@ -12,6 +12,8 @@ from daskgenie.common.schemas import (
     GraphLayer,
     GraphUpload,
     MemorySample,
+    RunCreate,
+    RunInfo,
     SampleBatch,
 )
 
@@ -22,5 +24,7 @@ __all__ = [
     "GraphLayer",
     "GraphUpload",
     "MemorySample",
+    "RunCreate",
+    "RunInfo",
     "SampleBatch",
 ]

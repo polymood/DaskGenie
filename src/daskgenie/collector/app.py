@@ -21,7 +21,14 @@ from prometheus_client import (
 )
 
 from daskgenie.collector.store import Store
-from daskgenie.common.schemas import SCHEMA_VERSION, DeathEvent, GraphUpload, SampleBatch
+from daskgenie.common.schemas import (
+    SCHEMA_VERSION,
+    DeathEvent,
+    GraphUpload,
+    RunCreate,
+    RunInfo,
+    SampleBatch,
+)
 
 
 def create_app(store: Store | None = None) -> FastAPI:
@@ -54,9 +61,12 @@ def create_app(store: Store | None = None) -> FastAPI:
                 detail=f"schema_version {version} != collector {SCHEMA_VERSION}",
             )
 
+    # -- ingest -------------------------------------------------------------
+
     @app.post("/ingest/samples")
     def ingest_samples(batch: SampleBatch) -> dict[str, int]:
         _reject_stale(batch.schema_version)
+        store.ensure_run(batch.run_id)
         store.add_samples(batch)
         samples_counter.inc(len(batch.samples))
         for s in batch.samples:
@@ -67,18 +77,20 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.post("/ingest/graph")
     def ingest_graph(upload: GraphUpload) -> dict[str, int]:
         _reject_stale(upload.schema_version)
+        store.ensure_run(upload.run_id)
         store.add_graph(upload)
         return {"layers": len(upload.layers)}
 
     @app.post("/ingest/death")
     def ingest_death(event: DeathEvent) -> dict[str, str]:
         _reject_stale(event.schema_version)
+        store.ensure_run(event.run_id)
         # The scheduler only knows *which* tasks were in-flight; the chunk sizes
         # were captured worker-side and already live here. Join them now so the
         # stored post-mortem answers "which chunk killed this worker" directly.
         enriched = list(event.suspect_chunks)
         for key in event.suspect_keys:
-            enriched.extend(store.chunks_for(key))
+            enriched.extend(store.chunks_for(event.run_id, key))
         store.add_death(event.model_copy(update={"suspect_chunks": enriched}))
         deaths_counter.inc()
         return {"status": "recorded"}
@@ -92,20 +104,43 @@ def create_app(store: Store | None = None) -> FastAPI:
             managed_gauge.labels(worker).set(sample.managed_bytes)
         return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
 
-    @app.get("/api/timeline")
-    def timeline(worker: str | None = None) -> list[dict[str, Any]]:
-        return store.timeline(worker)
+    # -- run management -----------------------------------------------------
 
-    @app.get("/api/chunks/{task_key:path}")
-    def chunks(task_key: str) -> list[dict[str, Any]]:
-        return [c.model_dump() for c in store.chunks_for(task_key)]
+    @app.post("/api/runs")
+    def create_run(body: RunCreate) -> RunInfo:
+        return store.create_run(body.name)
 
-    @app.get("/api/graph/{run_id}")
+    @app.get("/api/runs")
+    def list_runs() -> list[RunInfo]:
+        return store.list_runs()
+
+    @app.get("/api/runs/{run_id}")
+    def get_run(run_id: str) -> RunInfo:
+        run = store.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="unknown run")
+        return run
+
+    @app.delete("/api/runs/{run_id}")
+    def delete_run(run_id: str) -> dict[str, bool]:
+        return {"deleted": store.delete_run(run_id)}
+
+    # -- run-scoped query ---------------------------------------------------
+
+    @app.get("/api/runs/{run_id}/timeline")
+    def timeline(run_id: str, worker: str | None = None) -> list[dict[str, Any]]:
+        return store.timeline(run_id, worker)
+
+    @app.get("/api/runs/{run_id}/chunks/{task_key:path}")
+    def chunks(run_id: str, task_key: str) -> list[dict[str, Any]]:
+        return [c.model_dump() for c in store.chunks_for(run_id, task_key)]
+
+    @app.get("/api/runs/{run_id}/graph")
     def graph(run_id: str) -> dict[str, Any]:
         return store.graph(run_id)
 
-    @app.get("/api/deaths")
-    def deaths() -> list[dict[str, Any]]:
-        return store.deaths()
+    @app.get("/api/runs/{run_id}/deaths")
+    def deaths(run_id: str) -> list[dict[str, Any]]:
+        return store.deaths(run_id)
 
     return app
