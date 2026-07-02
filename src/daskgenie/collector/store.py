@@ -23,6 +23,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from daskgenie.common.schemas import (
     ChunkMeta,
@@ -254,7 +255,7 @@ class Store:
 
     def timeline(
         self, run_id: str, worker: str | None = None, limit: int = 10000
-    ) -> list[dict[str, object]]:
+    ) -> list[dict[str, Any]]:
         with self._lock:
             if worker is None:
                 rows = self._conn.execute(
@@ -297,7 +298,7 @@ class Store:
             for r in rows
         ]
 
-    def graph(self, run_id: str) -> dict[str, object]:
+    def graph(self, run_id: str) -> dict[str, Any]:
         with self._lock:
             layers = self._conn.execute(
                 "SELECT layer, filename, lineno, code_snippet FROM graph_layers WHERE run_id = ?",
@@ -316,7 +317,7 @@ class Store:
             "layer_dependencies": dep_map,
         }
 
-    def deaths(self, run_id: str) -> list[dict[str, object]]:
+    def deaths(self, run_id: str) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT timestamp, worker, suspect_keys, suspect_chunks, suspected_oom, "

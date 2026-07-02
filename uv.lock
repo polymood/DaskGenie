@@ -149,6 +149,7 @@ dependencies = [
 [package.optional-dependencies]
 collector = [
     { name = "fastapi" },
+    { name = "jinja2" },
     { name = "prometheus-client" },
     { name = "uvicorn" },
 ]
@@ -163,6 +164,7 @@ dev = [
     { name = "distributed" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "jinja2" },
     { name = "mypy" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -178,6 +180,7 @@ requires-dist = [
     { name = "dask", specifier = ">=2024.1.0" },
     { name = "distributed", marker = "extra == 'demo'", specifier = ">=2024.1.0" },
     { name = "fastapi", marker = "extra == 'collector'", specifier = ">=0.110" },
+    { name = "jinja2", marker = "extra == 'collector'", specifier = ">=3.1" },
     { name = "numpy", marker = "extra == 'demo'", specifier = ">=1.26" },
     { name = "prometheus-client", marker = "extra == 'collector'", specifier = ">=0.20" },
     { name = "pydantic", specifier = ">=2.6" },
@@ -190,6 +193,7 @@ dev = [
     { name = "distributed", specifier = ">=2024.1.0" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "mypy", specifier = ">=1.10" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "prometheus-client", specifier = ">=0.20" },

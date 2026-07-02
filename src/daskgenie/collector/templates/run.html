@@ -1,0 +1,101 @@
+{% extends "base.html" %} {% block title %}{{ run.name }} · DaskGenie{% endblock %} {% block content
+%}
+<div class="breadcrumb"><a href="/">Runs</a> <span>/</span> {{ run.name }}</div>
+<div class="page-head">
+  <h1>{{ run.name }}</h1>
+  <div class="mono muted small">{{ run.id }}</div>
+</div>
+
+<nav class="subnav">
+  <a href="/runs/{{ run.id }}" class="{{ 'active' if section == 'overview' }}">Overview</a>
+  <a href="/runs/{{ run.id }}/postmortem" class="{{ 'active' if section == 'postmortem' }}"
+    >Post-mortem{% if death_count %} ({{ death_count }}){% endif %}</a
+  >
+  <a href="/runs/{{ run.id }}/memory" class="{{ 'active' if section == 'memory' }}">Memory</a>
+  <a href="/runs/{{ run.id }}/graph" class="{{ 'active' if section == 'graph' }}">Source map</a>
+</nav>
+
+{% if section == 'overview' %}
+<div class="stats">
+  <div class="stat">
+    <div class="stat-num">{{ run.counts.workers or 0 }}</div>
+    <div class="stat-lab">Workers</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num">{{ run.counts.samples or 0 }}</div>
+    <div class="stat-lab">Samples</div>
+  </div>
+  <div class="stat {{ 'danger' if run.counts.deaths }}">
+    <div class="stat-num">{{ run.counts.deaths or 0 }}</div>
+    <div class="stat-lab">Worker deaths</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num">{{ peak_bytes | bytes }}</div>
+    <div class="stat-lab">Peak worker RSS</div>
+  </div>
+</div>
+
+{% if chart %} {% include "_chart.html" %} {% endif %} {% if oom_count %}
+<p class="muted">
+  {{ oom_count }} suspected-OOM death{{ 's' if oom_count != 1 }} recorded —
+  <a href="/runs/{{ run.id }}/postmortem">see the post-mortem</a>.
+</p>
+{% endif %} {% elif section == 'postmortem' %} {% if deaths %} {% for d in deaths %}
+<section class="card {{ 'death' if d.suspected_oom }}">
+  <div class="card-head">
+    {% if d.suspected_oom %}<span class="tag danger">suspected OOM</span>{% else %}<span class="tag"
+      >removed</span
+    >{% endif %}
+    <span class="mono">{{ d.worker }}</span>
+  </div>
+  <p class="reason">{{ d.reason }}</p>
+  {% for s in d.suspects %}
+  <div class="suspect">
+    <div class="mono task">{{ s.key }}</div>
+    {% if s.source %}
+    <div class="mono src">{{ s.source.filename }}:{{ s.source.lineno }} · {{ s.source.snippet }}</div>
+    {% else %}
+    <div class="mono src faint">no source mapping (upload the graph with upload_graph)</div>
+    {% endif %} {% if s.chunks %}
+    <div class="chunks">
+      {% for c in s.chunks %}
+      <span class="chunk">({{ c.shape | join(', ') }}) {{ c.dtype }} = <b>{{ c.nbytes | bytes }}</b></span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endfor %} {% else %}
+<div class="empty">
+  No worker deaths recorded for this run. Workers killed mid-task appear here with the task and chunk
+  they were holding.
+</div>
+{% endif %} {% elif section == 'memory' %} {% if chart %} {% include "_chart.html" %} {% else %}
+<div class="empty">No memory samples for this run yet.</div>
+{% endif %} {% elif section == 'graph' %} {% if layers %}
+<table class="data">
+  <thead>
+    <tr>
+      <th>Layer</th>
+      <th>Source</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for l in layers %}
+    <tr>
+      <td class="mono">{{ l.layer }}</td>
+      <td class="mono small">
+        {{ l.filename }}:{{ l.lineno }}
+        <div class="muted">{{ l.code_snippet }}</div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">
+  No source map uploaded for this run. Capture it with <code>daskgenie.track()</code> and push it
+  with <code>upload_graph(...)</code>.
+</div>
+{% endif %} {% endif %} {% endblock %}
