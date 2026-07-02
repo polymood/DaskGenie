@@ -6,6 +6,8 @@ from daskgenie.graphcapture import (
     track,
     watch,
 )
+from daskgenie.local_profiler import LocalProfiler
+from daskgenie.report import create_run, upload_graph
 
 __all__ = [
     "SourceLocation",
@@ -14,4 +16,7 @@ __all__ = [
     "watch",
     "get_layer_map",
     "extract_graph",
+    "LocalProfiler",
+    "upload_graph",
+    "create_run",
 ]

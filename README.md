@@ -22,8 +22,11 @@ Built incrementally, each stage proven before the next is built. See
       over the collector API: runs list, per-run overview, post-mortem with
       syntax-highlighted source, memory timeline, and the task-graph DAG.
       `docker compose up` runs collector + dashboard, persisted on a volume.
-- [ ] Next: scheduler-agnostic profiling (threaded/synchronous schedulers),
-      aligned execution-ordered view, memory flamegraphs, example scripts.
+- [x] **Any scheduler.** `LocalProfiler` (Dask callback API) profiles memory +
+      per-task chunks on the threaded/synchronous/processes schedulers, not
+      just `dask.distributed`. Runnable `examples/`.
+- [ ] Next: aligned execution-ordered view, memory flamegraphs, on-demand
+      single-task memray, TimescaleDB backend.
 
 ## The dashboard (always-on, via Docker)
 
@@ -80,23 +83,42 @@ Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync --group dev
-uv run python demo/oom_pipeline.py
+uv run --extra demo python examples/graph_source_map.py
 ```
 
-This builds a pipeline shaped like a real xarray-on-Zarr workload (chunked
-read → rechunk-merge → per-block op) and prints the layer → source-location
-map `GraphCapture` recovered from it:
+This prints the layer → source-location map `GraphCapture` recovered from a
+pipeline (chunked read → rechunk-merge → per-block op):
 
 ```
 layer                                         source
 ----------------------------------------------------------------------------------------------------
-random_sample-...                             demo/oom_pipeline.py:24  return da.random.random(...)
-rechunk-merge-...                              demo/oom_pipeline.py:32  return arr.rechunk((8000, 8000))
-double_precision_blowup-...                    demo/oom_pipeline.py:48  z = y.map_blocks(...)
+random_sample-...                             examples/graph_source_map.py:15  x = da.random.random(...)
+rechunk-merge-...                             examples/graph_source_map.py:16  y = x.rechunk((8000, 8000))
+lambda-...                                    examples/graph_source_map.py:17  return y.map_blocks(...).sum()
 ```
 
 Each layer name is the exact key Dask uses internally; each source location
 points at the *user's* call site, not into `dask`/`numpy`/`xarray` internals.
+See [`examples/`](./examples) for the full set of runnable examples.
+
+## Any scheduler, not just distributed
+
+On `dask.distributed`, `register()` installs worker + scheduler plugins. For the
+**local** schedulers (`scheduler="threads"|"synchronous"|"processes"` — the
+default for bare dask arrays/dataframes) use `LocalProfiler`, which hooks Dask's
+callback API to sample memory and per-task output chunks:
+
+```python
+import daskgenie as dg
+
+with dg.track() as source_map:
+    result = build_pipeline()
+
+with dg.LocalProfiler("http://localhost:8765", run_name="threaded job",
+                      source_map=source_map) as prof:
+    result.compute(scheduler="threads")
+# prof.run_id shows up in the dashboard like any other run
+```
 
 ### Using it in your own code
 
@@ -142,22 +164,22 @@ import daskgenie.client as genie
 cluster = LocalCluster(n_workers=4, processes=True)
 client = Client(cluster)
 
-genie.register(client, "http://127.0.0.1:8765")   # per-task memory sampling
+run_id = genie.register(client, "http://127.0.0.1:8765")   # opens a run
 
 with dg.track() as layer_map:
     result = build_pipeline()            # your xarray-on-Zarr work
-genie.upload_graph("http://127.0.0.1:8765", "run-1", layer_map)
+genie.upload_graph("http://127.0.0.1:8765", run_id, layer_map)
 
 result.compute()
 ```
 
-Read it back with plain HTTP:
+Read it back with plain HTTP (everything is scoped to the `run_id`):
 
 ```bash
-curl 'http://127.0.0.1:8765/api/timeline'      # per-worker memory over time
-curl 'http://127.0.0.1:8765/api/chunks/<task-key>'   # (shape, dtype, nbytes)
-curl 'http://127.0.0.1:8765/api/deaths'        # worker-death post-mortems
-curl 'http://127.0.0.1:8765/metrics'           # Prometheus: point Grafana here
+curl 'http://127.0.0.1:8765/api/runs'                       # list runs
+curl "http://127.0.0.1:8765/api/runs/$RUN/timeline"         # memory over time
+curl "http://127.0.0.1:8765/api/runs/$RUN/deaths"           # worker-death post-mortems
+curl 'http://127.0.0.1:8765/metrics'                        # Prometheus: point Grafana here
 ```
 
 The `/metrics` endpoint exposes per-worker RSS and managed-memory gauges plus
@@ -170,24 +192,15 @@ model (`daskgenie.common.schemas`); the plugins never import collector code.
 When `register()` is active, a scheduler plugin watches for worker deaths. On a
 death it records the tasks that were in flight on that worker as suspects, and
 the collector joins in the chunk metadata the worker had already reported — so
-`/api/deaths` tells you the worker, the suspect task, the chunk it was holding,
-and (via the source map) the line that produced it.
+the post-mortem tells you the worker, the suspect task, the chunk it was
+holding, and (via the source map) the line that produced it.
 
-See it end to end on a LocalCluster whose worker is really OOM-killed:
+See it end to end on a LocalCluster whose worker is really OOM-killed, then open
+the run's **Post-mortem** tab in the dashboard:
 
 ```bash
-uv run --extra collector --extra demo python demo/oom_death.py
-```
-
-```
-POST-MORTEM: which chunk killed which worker, and what code produced it
-==============================================================================
-worker died: tcp://127.0.0.1:39119
-reason:      abrupt removal with 2 task(s) in flight (suspected OOM, ...)
-
-  in-flight task: ('sum-c9daa81c...', 1, 1)
-  source line:    demo/oom_death.py:48  return persisted.map_blocks(blowup, ...).sum()
-  chunk held:     (4000, 4000) float64 = 128 MB
+docker compose up -d --build
+uv run --extra demo python examples/distributed_oom.py
 ```
 
 OOM vs. clean shutdown is a heuristic, not a certainty: the scheduler doesn't

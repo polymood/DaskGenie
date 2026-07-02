@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 import psutil
 from distributed.diagnostics.plugin import WorkerPlugin
 
+from daskgenie.common.arrays import describe_array, key_str
 from daskgenie.common.schemas import ChunkMeta, MemorySample, SampleBatch
 
 if TYPE_CHECKING:
@@ -126,14 +127,14 @@ class MemoryProfilerPlugin(WorkerPlugin):
         # We key the metadata by the *consuming* task (this `key`), because that
         # is the key the scheduler reports as a suspect on worker death, so this
         # is what makes the death -> chunk join work downstream.
-        consumer = _key_str(key)
+        consumer = key_str(key)
         for dep in ts.dependencies:
-            dep_key = _key_str(dep.key)
+            dep_key = key_str(dep.key)
             dedup = (consumer, dep_key)
             if dedup in self._seen_chunk_keys:
                 continue
             data = worker.data.get(dep.key)
-            meta = _describe_array(consumer, data)
+            meta = describe_array(consumer, data)
             if meta is not None:
                 self._seen_chunk_keys.add(dedup)
                 with self._lock:
@@ -146,7 +147,7 @@ class MemoryProfilerPlugin(WorkerPlugin):
         try:
             rss = self._proc.memory_info().rss
             managed = int(getattr(worker.state, "nbytes", 0))
-            executing = [_key_str(ts.key) for ts in worker.state.executing]
+            executing = [key_str(ts.key) for ts in worker.state.executing]
         except Exception:  # noqa: BLE001 - degrade to no data, never crash
             logger.debug("sample failed", exc_info=True)
             return
@@ -205,26 +206,3 @@ class MemoryProfilerPlugin(WorkerPlugin):
                 self._flush()
                 last_flush = now
             self._stop.wait(self.sample_interval)
-
-
-def _key_str(key: object) -> str:
-    # Dask keys are often tuples like ("rechunk-merge-abc", 0, 1); str() gives a
-    # stable, join-friendly form that matches what the graph/source map uses.
-    return key if isinstance(key, str) else str(key)
-
-
-def _describe_array(key: object, data: object) -> ChunkMeta | None:
-    shape = getattr(data, "shape", None)
-    dtype = getattr(data, "dtype", None)
-    nbytes = getattr(data, "nbytes", None)
-    if shape is None or nbytes is None:
-        return None
-    try:
-        return ChunkMeta(
-            task_key=_key_str(key),
-            shape=tuple(int(d) for d in shape),
-            dtype=str(dtype),
-            nbytes=int(nbytes),
-        )
-    except (TypeError, ValueError):
-        return None
