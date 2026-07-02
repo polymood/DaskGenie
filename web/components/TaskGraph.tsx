@@ -14,13 +14,11 @@ import {
 } from "@xyflow/react";
 import { useMemo, useState } from "react";
 import { useChunks, useDeaths, useGraph } from "@/lib/api";
+import { baseName, layerColorMap } from "@/lib/colors";
 import { bytes, layerToken, shortKey } from "@/lib/format";
 import type { GraphData, GraphLayer } from "@/lib/types";
 import { CodeLine } from "./CodeLine";
 
-const PALETTE = [
-  "#3b5bdb", "#2b8a3e", "#c2410c", "#7048e8", "#0b7285", "#a61e4d", "#5c940d", "#862e9c",
-];
 const NODE_W = 168;
 const NODE_H = 38;
 // Above this many task nodes we render the layer-level graph instead — a few
@@ -40,10 +38,6 @@ function GraphNode({ data }: NodeProps) {
   );
 }
 const nodeTypes = { g: GraphNode };
-
-function baseName(layer: string): string {
-  return layer.replace(/-[0-9a-f]{6,}$/i, "").split("-").slice(0, 2).join("-") || layer;
-}
 
 // Top-to-bottom layered layout via dagre.
 function laidOut(
@@ -175,14 +169,7 @@ export function TaskGraph({ runId }: { runId: string }) {
     [deaths],
   );
 
-  const colorOf = useMemo(() => {
-    const map = new Map<string, string>();
-    return (layer: string) => {
-      const key = baseName(layer);
-      if (!map.has(key)) map.set(key, PALETTE[map.size % PALETTE.length]);
-      return map.get(key)!;
-    };
-  }, []);
+  const colorOf = useMemo(() => layerColorMap(), []);
 
   const { nodes, edges, taskLevel } = useMemo(
     () =>

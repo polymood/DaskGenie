@@ -1,7 +1,15 @@
 "use client";
 
 import useSWR from "swr";
-import type { ChunkMeta, DeathEvent, GraphData, RunInfo, Sample } from "./types";
+import type {
+  ChunkMeta,
+  DeathEvent,
+  GraphData,
+  LayerStat,
+  RunInfo,
+  Sample,
+  TaskSpan,
+} from "./types";
 
 const fetcher = async (url: string) => {
   const res = await fetch(url);
@@ -30,6 +38,14 @@ export function useTimeline(id: string) {
 
 export function useGraph(id: string) {
   return useSWR<GraphData>(`/api/runs/${id}/graph`, fetcher);
+}
+
+export function useSpans(id: string) {
+  return useSWR<TaskSpan[]>(`/api/runs/${id}/spans`, fetcher, LIVE);
+}
+
+export function useLayerStats(id: string) {
+  return useSWR<LayerStat[]>(`/api/runs/${id}/layer-stats`, fetcher, LIVE);
 }
 
 export function useChunks(id: string, key: string | null) {

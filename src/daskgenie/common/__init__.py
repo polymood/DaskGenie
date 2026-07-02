@@ -16,6 +16,7 @@ from daskgenie.common.schemas import (
     RunCreate,
     RunInfo,
     SampleBatch,
+    TaskSpan,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "RunCreate",
     "RunInfo",
     "SampleBatch",
+    "TaskSpan",
 ]

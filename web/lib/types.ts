@@ -43,6 +43,21 @@ export interface GraphNode {
   layer: string;
 }
 
+export interface TaskSpan {
+  key: string;
+  layer: string;
+  start: number;
+  end: number;
+  worker: string;
+}
+
+export interface LayerStat {
+  layer: string;
+  count: number;
+  total_seconds: number;
+  longest_seconds: number;
+}
+
 export interface GraphData {
   run_id: string;
   layers: GraphLayer[];

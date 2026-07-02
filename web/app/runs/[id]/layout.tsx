@@ -22,7 +22,7 @@ export default function RunLayout({
   const tabs = [
     { href: base, label: "Overview" },
     { href: `${base}/postmortem`, label: `Post-mortem${deathCount ? ` · ${deathCount}` : ""}` },
-    { href: `${base}/memory`, label: "Memory" },
+    { href: `${base}/timeline`, label: "Timeline" },
     { href: `${base}/graph`, label: "Task graph" },
   ];
 

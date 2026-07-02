@@ -14,6 +14,12 @@ def key_str(key: object) -> str:
     return key if isinstance(key, str) else str(key)
 
 
+def layer_of(key: object) -> str:
+    # A task's layer name is the first element of its tuple key, which matches
+    # the HighLevelGraph layer names and joins to the source map.
+    return str(key[0]) if isinstance(key, tuple) and key else str(key)
+
+
 def describe_array(key: object, data: object) -> ChunkMeta | None:
     """Return ChunkMeta for a numpy/dask-chunk-like object, else None."""
     shape = getattr(data, "shape", None)

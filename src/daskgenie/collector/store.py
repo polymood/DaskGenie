@@ -110,6 +110,17 @@ CREATE TABLE IF NOT EXISTS deaths (
     reason TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_deaths_run ON deaths(run_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS task_spans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    layer TEXT NOT NULL,
+    start REAL NOT NULL,
+    end REAL NOT NULL,
+    worker TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_spans_run_start ON task_spans(run_id, start);
 """
 
 
@@ -202,6 +213,7 @@ class Store:
                 "graph_edges",
                 "graph_meta",
                 "deaths",
+                "task_spans",
             ):
                 self._conn.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))  # noqa: S608
             self._conn.commit()
@@ -236,6 +248,14 @@ class Store:
                 [
                     (batch.run_id, c.task_key, json.dumps(list(c.shape)), c.dtype, c.nbytes)
                     for c in batch.chunks
+                ],
+            )
+            self._conn.executemany(
+                "INSERT INTO task_spans (run_id, key, layer, start, end, worker) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (batch.run_id, s.key, s.layer, s.start, s.end, s.worker)
+                    for s in batch.spans
                 ],
             )
             self._conn.commit()
@@ -392,6 +412,44 @@ class Store:
                 "suspect_chunks": json.loads(r["suspect_chunks"]),
                 "suspected_oom": bool(r["suspected_oom"]),
                 "reason": r["reason"],
+            }
+            for r in rows
+        ]
+
+    def spans(self, run_id: str, limit: int = 20000) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT key, layer, start, end, worker FROM task_spans "
+                "WHERE run_id = ? ORDER BY start LIMIT ?",
+                (run_id, limit),
+            ).fetchall()
+        return [
+            {
+                "key": r["key"],
+                "layer": r["layer"],
+                "start": r["start"],
+                "end": r["end"],
+                "worker": r["worker"],
+            }
+            for r in rows
+        ]
+
+    def layer_stats(self, run_id: str) -> list[dict[str, Any]]:
+        """Per-layer task counts and total/max execution time — the 'progress'
+        breakdown, aggregated in SQL so the payload stays small."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT layer, COUNT(*) AS n, SUM(end - start) AS total, "
+                "MAX(end - start) AS longest FROM task_spans WHERE run_id = ? "
+                "GROUP BY layer ORDER BY total DESC",
+                (run_id,),
+            ).fetchall()
+        return [
+            {
+                "layer": r["layer"],
+                "count": r["n"],
+                "total_seconds": r["total"] or 0.0,
+                "longest_seconds": r["longest"] or 0.0,
             }
             for r in rows
         ]

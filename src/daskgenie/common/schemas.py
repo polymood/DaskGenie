@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field
 # against the value carried on incoming payloads.
 # v2: introduced the first-class "run" — every payload now carries a run_id.
 # v3: GraphUpload carries the full task graph (nodes/edges/task_count).
-SCHEMA_VERSION = 3
+# v4: SampleBatch carries task spans (per-task start/end) for the timeline.
+SCHEMA_VERSION = 4
 
 
 class ChunkMeta(BaseModel):
@@ -39,14 +40,25 @@ class MemorySample(BaseModel):
     executing_keys: list[str]  # task keys running when this sample was taken
 
 
+class TaskSpan(BaseModel):
+    """One task's execution interval, for the task-stream / timeline view."""
+
+    key: str
+    layer: str
+    start: float  # unix epoch seconds
+    end: float
+    worker: str
+
+
 class SampleBatch(BaseModel):
-    """A batch of samples + freshly-seen chunk metadata from one worker."""
+    """A batch of samples + freshly-seen chunk metadata + task spans."""
 
     schema_version: int = Field(default=SCHEMA_VERSION)
     run_id: str
     worker: str  # worker address, e.g. "tcp://127.0.0.1:39001"
     samples: list[MemorySample] = Field(default_factory=list)
     chunks: list[ChunkMeta] = Field(default_factory=list)
+    spans: list[TaskSpan] = Field(default_factory=list)
 
 
 class GraphLayer(BaseModel):

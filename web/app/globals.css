@@ -523,3 +523,72 @@ table.data tbody tr:hover {
   letter-spacing: 0.04em;
   color: var(--faint);
 }
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- aligned timeline ---- */
+.tl-axis {
+  fill: var(--faint);
+  font-size: 10.5px;
+  font-family: var(--mono);
+}
+.tl-head {
+  fill: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ---- layer breakdown (progress) ---- */
+.lstat {
+  display: grid;
+  grid-template-columns: 1fr 60px 70px;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12.5px;
+}
+.lstat:last-child {
+  border-bottom: none;
+}
+.lstat .bar {
+  height: 8px;
+  background: var(--panel-2);
+  position: relative;
+  overflow: hidden;
+}
+.lstat .bar > span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+}
+.lstat .lname {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lstat .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.lstat .sw {
+  width: 9px;
+  height: 9px;
+  flex: none;
+}

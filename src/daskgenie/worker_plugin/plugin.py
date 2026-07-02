@@ -26,8 +26,8 @@ from typing import TYPE_CHECKING, Any
 import psutil
 from distributed.diagnostics.plugin import WorkerPlugin
 
-from daskgenie.common.arrays import describe_array, key_str
-from daskgenie.common.schemas import ChunkMeta, MemorySample, SampleBatch
+from daskgenie.common.arrays import describe_array, key_str, layer_of
+from daskgenie.common.schemas import ChunkMeta, MemorySample, SampleBatch, TaskSpan
 
 if TYPE_CHECKING:
     from dask.typing import Key
@@ -53,6 +53,8 @@ class MemoryProfilerPlugin(WorkerPlugin):
     _proc: psutil.Process
     _samples: deque[MemorySample]
     _chunks: deque[ChunkMeta]
+    _spans: deque[TaskSpan]
+    _starts: dict[str, float]
     _seen_chunk_keys: set[tuple[str, str]]
     _lock: threading.Lock
     _stop: threading.Event
@@ -83,6 +85,8 @@ class MemoryProfilerPlugin(WorkerPlugin):
         self._proc = psutil.Process()
         self._samples: deque[MemorySample] = deque(maxlen=_MAX_SAMPLES)
         self._chunks: deque[ChunkMeta] = deque(maxlen=_MAX_CHUNKS)
+        self._spans: deque[TaskSpan] = deque(maxlen=_MAX_CHUNKS)
+        self._starts: dict[str, float] = {}
         # dedup on (consumer_key, input_key) so re-entry doesn't re-record
         self._seen_chunk_keys: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
@@ -104,13 +108,32 @@ class MemoryProfilerPlugin(WorkerPlugin):
         finish: TaskStateState,
         **kwargs: Any,
     ) -> None:
-        # Record input chunk metadata exactly once, when a task begins running.
-        if finish != "executing":
-            return
         try:
-            self._capture_chunks(key)
+            if finish == "executing":
+                # Task begins running: record its input chunks + start time.
+                self._starts[key_str(key)] = time.time()
+                self._capture_chunks(key)
+            elif start == "executing":
+                # Task left the executing state: close out its span.
+                self._close_span(key)
         except Exception:  # noqa: BLE001 - profiling must never crash the worker
-            logger.debug("chunk capture failed for %s", key, exc_info=True)
+            logger.debug("transition handling failed for %s", key, exc_info=True)
+
+    def _close_span(self, key: Key) -> None:
+        sk = key_str(key)
+        started = self._starts.pop(sk, None)
+        if started is None:
+            return
+        worker = self._worker
+        span = TaskSpan(
+            key=sk,
+            layer=layer_of(key),
+            start=started,
+            end=time.time(),
+            worker=worker.address if worker is not None else "",
+        )
+        with self._lock:
+            self._spans.append(span)
 
     # -- internals ----------------------------------------------------------
 
@@ -165,16 +188,18 @@ class MemoryProfilerPlugin(WorkerPlugin):
         if worker is None:
             return None
         with self._lock:
-            if not self._samples and not self._chunks:
+            if not self._samples and not self._chunks and not self._spans:
                 return None
             batch = SampleBatch(
                 run_id=self.run_id,
                 worker=worker.address,
                 samples=list(self._samples),
                 chunks=list(self._chunks),
+                spans=list(self._spans),
             )
             self._samples.clear()
             self._chunks.clear()
+            self._spans.clear()
         return batch
 
     def _flush(self) -> None:

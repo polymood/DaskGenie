@@ -59,12 +59,16 @@ result.compute()
 The dashboard lists every run (worker/sample/death counts, one-click delete).
 Open a run for:
 
-- **Overview** — headline stats and the memory-over-time chart.
+- **Overview** — stats (workers, tasks, deaths, peak RSS), memory-over-time,
+  and a per-layer task/time breakdown.
 - **Post-mortem** — each worker death: suspect task, source line (syntax
   highlighted), and the chunk it was holding (`(4000, 4000) float64 = 128 MB`).
-- **Memory** — per-worker RSS timeline.
-- **Task graph** — the layer DAG, with nodes that were in flight at a death
-  highlighted.
+- **Timeline** — memory and a task stream on one **top-to-bottom time axis**
+  (allocation on the horizontal), so a memory spike lines up with the tasks
+  running at that moment.
+- **Task graph** — the real connected task DAG (top-to-bottom), coloured by
+  layer, death-suspect nodes highlighted; click a node for its source line and
+  chunk sizes. Falls back to a layer-level view for very large graphs.
 
 ### Developing the dashboard
 

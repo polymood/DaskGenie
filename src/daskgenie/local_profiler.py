@@ -39,8 +39,8 @@ import psutil
 from dask.callbacks import Callback
 
 from daskgenie import report
-from daskgenie.common.arrays import describe_array, key_str
-from daskgenie.common.schemas import ChunkMeta, MemorySample, SampleBatch
+from daskgenie.common.arrays import describe_array, key_str, layer_of
+from daskgenie.common.schemas import ChunkMeta, MemorySample, SampleBatch, TaskSpan
 from daskgenie.graphcapture import SourceLocation
 
 logger = logging.getLogger("daskgenie.local_profiler")
@@ -72,8 +72,10 @@ class LocalProfiler(Callback):
         self.run_id = run_id or report.create_run(collector_url, run_name)
         self._proc = psutil.Process()
         self._running: set[str] = set()
+        self._starts: dict[str, float] = {}
         self._samples: list[MemorySample] = []
         self._chunks: list[ChunkMeta] = []
+        self._spans: list[TaskSpan] = []
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -103,15 +105,30 @@ class LocalProfiler(Callback):
     # -- callback hooks (run inside the scheduler) ---------------------------
 
     def _pretask(self, key: Any, dsk: Any, state: Any) -> None:
+        sk = key_str(key)
         with self._lock:
-            self._running.add(key_str(key))
+            self._running.add(sk)
+            self._starts[sk] = time.time()
 
     def _posttask(self, key: Any, result: Any, dsk: Any, state: Any, worker_id: Any) -> None:
+        sk = key_str(key)
         meta = describe_array(key, result)
+        now = time.time()
         with self._lock:
-            self._running.discard(key_str(key))
+            self._running.discard(sk)
+            start = self._starts.pop(sk, None)
             if meta is not None and len(self._chunks) < _MAX_BUFFER:
                 self._chunks.append(meta)
+            if start is not None and len(self._spans) < _MAX_BUFFER:
+                self._spans.append(
+                    TaskSpan(
+                        key=sk,
+                        layer=layer_of(key),
+                        start=start,
+                        end=now,
+                        worker=self.worker_label,
+                    )
+                )
 
     # -- sampler -------------------------------------------------------------
 
@@ -135,16 +152,18 @@ class LocalProfiler(Callback):
 
     def _drain(self) -> SampleBatch | None:
         with self._lock:
-            if not self._samples and not self._chunks:
+            if not self._samples and not self._chunks and not self._spans:
                 return None
             batch = SampleBatch(
                 run_id=self.run_id,
                 worker=self.worker_label,
                 samples=list(self._samples),
                 chunks=list(self._chunks),
+                spans=list(self._spans),
             )
             self._samples.clear()
             self._chunks.clear()
+            self._spans.clear()
         return batch
 
     def _flush(self) -> None:

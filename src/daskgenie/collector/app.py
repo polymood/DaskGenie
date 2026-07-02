@@ -152,4 +152,12 @@ def create_app(store: Store | None = None) -> FastAPI:
     def deaths(run_id: str) -> list[dict[str, Any]]:
         return store.deaths(run_id)
 
+    @app.get("/api/runs/{run_id}/spans")
+    def spans(run_id: str) -> list[dict[str, Any]]:
+        return store.spans(run_id)
+
+    @app.get("/api/runs/{run_id}/layer-stats")
+    def layer_stats(run_id: str) -> list[dict[str, Any]]:
+        return store.layer_stats(run_id)
+
     return app
