@@ -37,12 +37,16 @@ CREATE TABLE IF NOT EXISTS samples (
 );
 CREATE INDEX IF NOT EXISTS idx_samples_worker_ts ON samples(worker, timestamp);
 
+-- One row per (consuming task, input chunk): a task can hold several inputs,
+-- and worker-side dedup already prevents duplicates, so no unique constraint.
 CREATE TABLE IF NOT EXISTS chunks (
-    task_key TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_key TEXT NOT NULL,
     shape TEXT NOT NULL,
     dtype TEXT NOT NULL,
     nbytes INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_chunks_task_key ON chunks(task_key);
 
 CREATE TABLE IF NOT EXISTS graph_layers (
     run_id TEXT NOT NULL,
@@ -104,9 +108,7 @@ class Store:
                 ],
             )
             self._conn.executemany(
-                "INSERT INTO chunks (task_key, shape, dtype, nbytes) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(task_key) DO UPDATE SET shape=excluded.shape, "
-                "dtype=excluded.dtype, nbytes=excluded.nbytes",
+                "INSERT INTO chunks (task_key, shape, dtype, nbytes) VALUES (?, ?, ?, ?)",
                 [(c.task_key, json.dumps(list(c.shape)), c.dtype, c.nbytes) for c in batch.chunks],
             )
             self._conn.commit()
@@ -177,20 +179,23 @@ class Store:
             for r in rows
         ]
 
-    def chunk(self, task_key: str) -> ChunkMeta | None:
+    def chunks_for(self, task_key: str) -> list[ChunkMeta]:
+        """Every input chunk recorded for a task — one task can hold several."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT task_key, shape, dtype, nbytes FROM chunks WHERE task_key = ?",
+            rows = self._conn.execute(
+                "SELECT task_key, shape, dtype, nbytes FROM chunks WHERE task_key = ? "
+                "ORDER BY nbytes DESC",
                 (task_key,),
-            ).fetchone()
-        if row is None:
-            return None
-        return ChunkMeta(
-            task_key=row["task_key"],
-            shape=tuple(json.loads(row["shape"])),
-            dtype=row["dtype"],
-            nbytes=row["nbytes"],
-        )
+            ).fetchall()
+        return [
+            ChunkMeta(
+                task_key=r["task_key"],
+                shape=tuple(json.loads(r["shape"])),
+                dtype=r["dtype"],
+                nbytes=r["nbytes"],
+            )
+            for r in rows
+        ]
 
     def graph(self, run_id: str) -> dict[str, object]:
         with self._lock:

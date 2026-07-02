@@ -52,7 +52,7 @@ class MemoryProfilerPlugin(WorkerPlugin):
     _proc: psutil.Process
     _samples: deque[MemorySample]
     _chunks: deque[ChunkMeta]
-    _seen_chunk_keys: set[str]
+    _seen_chunk_keys: set[tuple[str, str]]
     _lock: threading.Lock
     _stop: threading.Event
     _thread: threading.Thread | None = None
@@ -80,7 +80,8 @@ class MemoryProfilerPlugin(WorkerPlugin):
         self._proc = psutil.Process()
         self._samples: deque[MemorySample] = deque(maxlen=_MAX_SAMPLES)
         self._chunks: deque[ChunkMeta] = deque(maxlen=_MAX_CHUNKS)
-        self._seen_chunk_keys: set[str] = set()
+        # dedup on (consumer_key, input_key) so re-entry doesn't re-record
+        self._seen_chunk_keys: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="daskgenie-sampler", daemon=True)
@@ -120,11 +121,19 @@ class MemoryProfilerPlugin(WorkerPlugin):
         # A task's inputs are its dependencies' outputs, already materialized in
         # worker.data by the time it starts executing. Those concrete arrays are
         # what actually occupy memory — inspect them, not the lazy dask objects.
+        # We key the metadata by the *consuming* task (this `key`), because that
+        # is the key the scheduler reports as a suspect on worker death, so this
+        # is what makes the death -> chunk join work downstream.
+        consumer = _key_str(key)
         for dep in ts.dependencies:
+            dep_key = _key_str(dep.key)
+            dedup = (consumer, dep_key)
+            if dedup in self._seen_chunk_keys:
+                continue
             data = worker.data.get(dep.key)
-            meta = _describe_array(dep.key, data)
-            if meta is not None and meta.task_key not in self._seen_chunk_keys:
-                self._seen_chunk_keys.add(meta.task_key)
+            meta = _describe_array(consumer, data)
+            if meta is not None:
+                self._seen_chunk_keys.add(dedup)
                 with self._lock:
                     self._chunks.append(meta)
 

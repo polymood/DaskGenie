@@ -73,7 +73,13 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.post("/ingest/death")
     def ingest_death(event: DeathEvent) -> dict[str, str]:
         _reject_stale(event.schema_version)
-        store.add_death(event)
+        # The scheduler only knows *which* tasks were in-flight; the chunk sizes
+        # were captured worker-side and already live here. Join them now so the
+        # stored post-mortem answers "which chunk killed this worker" directly.
+        enriched = list(event.suspect_chunks)
+        for key in event.suspect_keys:
+            enriched.extend(store.chunks_for(key))
+        store.add_death(event.model_copy(update={"suspect_chunks": enriched}))
         deaths_counter.inc()
         return {"status": "recorded"}
 
@@ -91,11 +97,8 @@ def create_app(store: Store | None = None) -> FastAPI:
         return store.timeline(worker)
 
     @app.get("/api/chunks/{task_key:path}")
-    def chunk(task_key: str) -> dict[str, Any]:
-        meta = store.chunk(task_key)
-        if meta is None:
-            raise HTTPException(status_code=404, detail="unknown task key")
-        return meta.model_dump()
+    def chunks(task_key: str) -> list[dict[str, Any]]:
+        return [c.model_dump() for c in store.chunks_for(task_key)]
 
     @app.get("/api/graph/{run_id}")
     def graph(run_id: str) -> dict[str, Any]:

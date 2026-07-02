@@ -14,12 +14,30 @@ from distributed import Client
 
 from daskgenie.common.schemas import GraphLayer, GraphUpload
 from daskgenie.graphcapture import GraphInfo, SourceLocation
+from daskgenie.scheduler_plugin import DeathAttributionPlugin
 from daskgenie.worker_plugin import MemoryProfilerPlugin
 
 
-def register(client: Client, collector_url: str, *, sample_interval: float = 0.2) -> None:
-    """Install the memory-profiler plugin on every worker (and future workers)."""
-    client.register_plugin(MemoryProfilerPlugin(collector_url, sample_interval=sample_interval))
+def register(
+    client: Client,
+    collector_url: str,
+    *,
+    sample_interval: float = 0.2,
+    flush_interval: float = 0.5,
+) -> None:
+    """Install both profiler plugins: per-worker memory sampling and
+    scheduler-side death attribution.
+
+    ``flush_interval`` bounds how long chunk metadata can sit unsent on a
+    worker; keep it well under how fast your workers OOM, or the killer chunk's
+    metadata dies with the process before it is pushed.
+    """
+    client.register_plugin(
+        MemoryProfilerPlugin(
+            collector_url, sample_interval=sample_interval, flush_interval=flush_interval
+        )
+    )
+    client.register_plugin(DeathAttributionPlugin(collector_url))
 
 
 def upload_graph(

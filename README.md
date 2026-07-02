@@ -14,8 +14,10 @@ Built incrementally, each stage proven before the next is built. See
 - [x] **WorkerPlugin + Collector.** Per-task RSS / managed-memory sampling
       with input chunk metadata, batched to a FastAPI collector that stores to
       SQLite, exposes Prometheus `/metrics`, and serves a query API.
-- [ ] SchedulerPlugin (worker-death attribution — the v1 success criterion:
-      "which chunk killed this worker").
+- [x] **SchedulerPlugin — the v1 success criterion.** Tracks which tasks are
+      in flight on which worker and, on a worker death, records the suspect
+      tasks; the collector joins their chunk metadata so `curl /api/deaths`
+      answers *"which chunk killed this worker, and what code produced it."*
 - [ ] React UI (post-mortem view, aligned execution-ordered view, graph
       heatmap).
 
@@ -101,6 +103,7 @@ Read it back with plain HTTP:
 ```bash
 curl 'http://127.0.0.1:8765/api/timeline'      # per-worker memory over time
 curl 'http://127.0.0.1:8765/api/chunks/<task-key>'   # (shape, dtype, nbytes)
+curl 'http://127.0.0.1:8765/api/deaths'        # worker-death post-mortems
 curl 'http://127.0.0.1:8765/metrics'           # Prometheus: point Grafana here
 ```
 
@@ -108,6 +111,35 @@ The `/metrics` endpoint exposes per-worker RSS and managed-memory gauges plus
 sample/death counters, so existing Grafana setups get value without the custom
 UI. Every payload between the plugins and collector is a versioned pydantic
 model (`daskgenie.common.schemas`); the plugins never import collector code.
+
+## The post-mortem: which chunk killed this worker
+
+When `register()` is active, a scheduler plugin watches for worker deaths. On a
+death it records the tasks that were in flight on that worker as suspects, and
+the collector joins in the chunk metadata the worker had already reported — so
+`/api/deaths` tells you the worker, the suspect task, the chunk it was holding,
+and (via the source map) the line that produced it.
+
+See it end to end on a LocalCluster whose worker is really OOM-killed:
+
+```bash
+uv run --extra collector --extra demo python demo/oom_death.py
+```
+
+```
+POST-MORTEM: which chunk killed which worker, and what code produced it
+==============================================================================
+worker died: tcp://127.0.0.1:39119
+reason:      abrupt removal with 2 task(s) in flight (suspected OOM, ...)
+
+  in-flight task: ('sum-c9daa81c...', 1, 1)
+  source line:    demo/oom_death.py:48  return persisted.map_blocks(blowup, ...).sum()
+  chunk held:     (4000, 4000) float64 = 128 MB
+```
+
+OOM vs. clean shutdown is a heuristic, not a certainty: the scheduler doesn't
+tell a plugin *why* a worker left, so DaskGenie flags a *suspected* OOM only
+when tasks were in flight at an unexpected removal, and never over-claims.
 
 ## Development
 
