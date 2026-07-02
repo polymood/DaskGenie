@@ -5,9 +5,15 @@ description = "A code-to-graph-to-memory profiler for Dask: know which chunk kil
 requires-python = ">=3.11"
 dependencies = [
     "dask>=2024.1.0",
+    "pydantic>=2.6",
 ]
 
 [project.optional-dependencies]
+collector = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "prometheus-client>=0.20",
+]
 demo = [
     "distributed>=2024.1.0",
     "numpy>=1.26",
@@ -17,9 +23,14 @@ demo = [
 dev = [
     "pytest>=8.0",
     "mypy>=1.10",
+    "types-psutil>=6.0",
     "ruff>=0.6",
+    "httpx>=0.27",
     "distributed>=2024.1.0",
     "numpy>=1.26",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "prometheus-client>=0.20",
 ]
 
 [build-system]
@@ -42,3 +53,6 @@ python_version = "3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: spins up a real LocalCluster + collector (slow)",
+]

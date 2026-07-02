@@ -11,8 +11,9 @@ Built incrementally, each stage proven before the next is built. See
 - [x] **GraphCapture.** Maps Dask task-graph layers back to the user source
       line that built them. No UI. This is the de-risking step: prove source
       attribution works before building anything on top of it.
-- [ ] WorkerPlugin + Collector (memory sampling, chunk metadata, `/metrics`,
-      SQLite).
+- [x] **WorkerPlugin + Collector.** Per-task RSS / managed-memory sampling
+      with input chunk metadata, batched to a FastAPI collector that stores to
+      SQLite, exposes Prometheus `/metrics`, and serves a query API.
 - [ ] SchedulerPlugin (worker-death attribution — the v1 success criterion:
       "which chunk killed this worker").
 - [ ] React UI (post-mortem view, aligned execution-ordered view, graph
@@ -65,6 +66,48 @@ def build_pipeline():
 
 Results from `track()` and `@watch` accumulate into the same map; read it
 anytime with `dg.get_layer_map()`.
+
+## Profiling a live cluster (WorkerPlugin + Collector)
+
+Start the collector (SQLite-backed, serves ingest + `/metrics` + query API):
+
+```bash
+uv sync --group dev --extra collector
+uv run python -m daskgenie.collector --port 8765          # --db PATH to persist
+```
+
+Then, in your job, install the profiler plugin on the cluster and (optionally)
+push the source map so memory lines up with the code that produced it:
+
+```python
+from distributed import Client, LocalCluster
+import daskgenie as dg
+import daskgenie.client as genie
+
+cluster = LocalCluster(n_workers=4, processes=True)
+client = Client(cluster)
+
+genie.register(client, "http://127.0.0.1:8765")   # per-task memory sampling
+
+with dg.track() as layer_map:
+    result = build_pipeline()            # your xarray-on-Zarr work
+genie.upload_graph("http://127.0.0.1:8765", "run-1", layer_map)
+
+result.compute()
+```
+
+Read it back with plain HTTP:
+
+```bash
+curl 'http://127.0.0.1:8765/api/timeline'      # per-worker memory over time
+curl 'http://127.0.0.1:8765/api/chunks/<task-key>'   # (shape, dtype, nbytes)
+curl 'http://127.0.0.1:8765/metrics'           # Prometheus: point Grafana here
+```
+
+The `/metrics` endpoint exposes per-worker RSS and managed-memory gauges plus
+sample/death counters, so existing Grafana setups get value without the custom
+UI. Every payload between the plugins and collector is a versioned pydantic
+model (`daskgenie.common.schemas`); the plugins never import collector code.
 
 ## Development
 
