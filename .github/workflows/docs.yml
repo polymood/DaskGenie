@@ -1,16 +1,11 @@
 name: Docs
 
 # Build the MkDocs site and publish it to the gh-pages branch (GitHub Pages).
+# Deploys only from main (i.e. on a release merge) or when run manually — never
+# from develop, so published docs always match a released state.
 on:
   push:
-    branches: [develop]
-    paths:
-      - "docs/**"
-      - "mkdocs.yml"
-      - "src/**"
-      - "CONTRIBUTING.md"
-      - "CHANGELOG.md"
-      - ".github/workflows/docs.yml"
+    branches: [main]
   workflow_dispatch:
 
 permissions:
