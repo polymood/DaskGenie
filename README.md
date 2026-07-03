@@ -1,8 +1,15 @@
 <p align="center">
-  <img src="web/public/logo.svg" width="88" alt="DaskGenie logo" />
+  <img src="https://cdn.jsdelivr.net/gh/polymood/DaskGenie@develop/web/public/logo.svg" width="88" alt="DaskGenie logo" />
 </p>
 
 <h1 align="center">DaskGenie</h1>
+
+<p align="center">
+  <a href="https://pypi.org/project/daskgenie/"><img src="https://img.shields.io/pypi/v/daskgenie.svg" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/daskgenie/"><img src="https://img.shields.io/pypi/pyversions/daskgenie.svg" alt="Python versions"></a>
+  <a href="https://github.com/polymood/DaskGenie/actions/workflows/ci.yml"><img src="https://github.com/polymood/DaskGenie/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/polymood/DaskGenie/blob/develop/LICENSE"><img src="https://img.shields.io/github/license/polymood/DaskGenie.svg" alt="License"></a>
+</p>
 
 A memory profiler and live dashboard for Dask that ties a worker's memory back to
 the **line of your code** that caused it.
