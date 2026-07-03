@@ -8,8 +8,8 @@
   --text: #1b1d21;
   --muted: #62666d;
   --faint: #8a8f98;
-  --accent: #3b5bdb;
-  --accent-soft: #edf0fd;
+  --accent: #e8590c; /* Dask warm orange — interactive accent */
+  --accent-soft: #fdefe4;
   --danger: #d43b3b;
   --danger-soft: #fbecec;
   --warn: #b06a00;
@@ -66,12 +66,15 @@ a {
   background: var(--bg);
 }
 .topbar .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 650;
   font-size: 13.5px;
   letter-spacing: 0.02em;
 }
-.topbar .brand span {
-  color: var(--accent);
+.topbar .brand .brand-text span {
+  color: var(--accent); /* Dask warm accent on the "Genie" */
 }
 .topbar .sep {
   width: 1px;
@@ -104,11 +107,35 @@ a {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   min-height: 0;
+  transition: grid-template-columns 0.14s ease;
+}
+.shell.collapsed {
+  grid-template-columns: 0 1fr;
 }
 .sidebar {
   border-right: 1px solid var(--border);
   background: var(--sidebar);
   overflow-y: auto;
+  overflow-x: hidden;
+}
+.shell.collapsed .sidebar {
+  border-right: none;
+}
+.rail-toggle {
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  width: 26px;
+  height: 24px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  margin-right: 4px;
+}
+.rail-toggle:hover {
+  background: var(--panel-2);
+  color: var(--text);
 }
 .content {
   overflow-y: auto;
@@ -187,6 +214,21 @@ a {
   font-family: var(--mono);
   font-size: 12px;
   color: var(--faint);
+}
+.run-header .origin {
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  padding: 1px 7px;
+}
+.r-origin {
+  font-size: 10.5px;
+  color: var(--faint);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .run-header .spacer {
   flex: 1;
@@ -306,6 +348,60 @@ a {
   color: var(--danger);
   border-color: #e6b8b8;
   background: var(--danger-soft);
+}
+.btn.danger.solid {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.btn.danger.solid:hover {
+  background: #b83232;
+  color: #fff;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ---- modal ---- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.32);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 40px rgba(16, 24, 40, 0.22);
+  width: 420px;
+  max-width: calc(100vw - 32px);
+}
+.modal-head {
+  padding: 12px 16px;
+  font-weight: 620;
+  font-size: 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.modal-body {
+  padding: 16px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.modal-body .mono {
+  color: var(--text);
+}
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
 }
 
 /* ---- post-mortem ---- */
@@ -591,4 +687,388 @@ table.data tbody tr:hover {
   width: 9px;
   height: 9px;
   flex: none;
+}
+
+/* ---- live indicator ---- */
+.livedot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.livedot .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.livedot .dot.on {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(30, 122, 70, 0.14);
+}
+
+/* ---- workers table ---- */
+td .dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--faint);
+}
+td .dot.busy {
+  background: var(--ok);
+}
+td .dot.idle {
+  background: var(--border);
+}
+.wbar,
+.membar {
+  position: relative;
+  height: 16px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  overflow: hidden;
+}
+.wbar > span,
+.membar > span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--accent);
+}
+.wbar > em,
+.membar > em {
+  position: absolute;
+  right: 5px;
+  top: 0;
+  line-height: 16px;
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text);
+}
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.srcline {
+  font-weight: 560;
+}
+
+/* ---- task stream ---- */
+.tstream-wrap {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 78vh;
+}
+.tstream-tools {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 4;
+}
+.tstream-tools .btn {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.tstream-tip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 12px rgba(16, 24, 40, 0.1);
+  padding: 6px 9px;
+  z-index: 5;
+  min-width: 140px;
+}
+.small {
+  font-size: 11px;
+}
+
+/* ---- graph canvas ---- */
+.graph-hint {
+  position: absolute;
+  left: 8px;
+  bottom: 6px;
+  pointer-events: none;
+}
+.gc-zoom {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 3px;
+}
+.gc-zoom .btn {
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1;
+}
+.gc-scale {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 4px;
+  min-width: 40px;
+  text-align: right;
+}
+.gc-marquee {
+  position: absolute;
+  border: 1px dashed var(--accent);
+  background: rgba(232, 89, 12, 0.1);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* ---- flamegraph (icicle) ---- */
+.flame-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  gap: 10px;
+}
+.fg-select {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+.flame-split {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.flame-canvas {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.flame-node {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-right: 1px solid var(--bg);
+  border-bottom: 1px solid var(--bg);
+  padding: 0 5px;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  color: #fff;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.flame-node.lib {
+  opacity: 0.55; /* framework frames recede so your code stands out */
+}
+.flame-node.sel {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+  z-index: 2;
+}
+.flame-node span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flame-detail {
+  width: 300px;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  padding: 12px;
+}
+.flame-detail .fd-fn {
+  font-weight: 620;
+  font-size: 13px;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+.flame-detail .kv {
+  flex-direction: row;
+  justify-content: space-between;
+  margin: 8px 0 0;
+}
+.flame-detail .kv b {
+  color: var(--warn);
+  font-family: var(--mono);
+}
+
+/* ---- deep sites in post-mortem ---- */
+.dsites {
+  padding: 8px 14px 2px;
+}
+.dsites-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  margin-bottom: 5px;
+}
+.dsite {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  padding: 3px 0;
+}
+.dsite b {
+  color: var(--danger);
+  font-family: var(--mono);
+}
+.dsite .mono {
+  color: var(--muted);
+}
+
+/* ---- memory chart (canvas) ---- */
+.mchart {
+  width: 100%;
+}
+.mchart-reset {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+/* ---- memory + spike inspector ---- */
+.mem-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.9fr) minmax(280px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .mem-split {
+    grid-template-columns: 1fr;
+  }
+}
+/* dedicated Timeline page: roomy chart + inspector */
+.mem-explorer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1000px) {
+  .mem-explorer {
+    grid-template-columns: 1fr;
+  }
+}
+.mem-explorer-chart {
+  min-width: 0;
+}
+.mem-explorer-side {
+  position: sticky;
+  top: 8px;
+}
+.mem-chart {
+  min-width: 0;
+}
+.spike-empty {
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.spike {
+  display: flex;
+  flex-direction: column;
+  max-height: 460px;
+}
+.spike-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 12.5px;
+}
+.spike-head b {
+  color: var(--accent);
+  font-family: var(--mono);
+}
+.spike-body {
+  padding: 12px 14px;
+  overflow-y: auto;
+}
+.spike-sec-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 8px;
+}
+.spike-task {
+  border-left: 2px solid var(--border);
+  padding: 4px 0 8px 10px;
+  margin-bottom: 8px;
+}
+.spike-task .st-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.spike-task .st-key {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.spike-task .srcpath {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  margin: 4px 0 4px;
+}
+table.data.compact td {
+  padding: 5px 8px;
+  font-size: 11.5px;
+}
+
+/* ---- overview hot line ---- */
+.hotline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  padding: 9px 14px;
+  margin-bottom: 20px;
+  font-size: 12.5px;
+}
+.hotline .k {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+.hotline .v {
+  color: var(--text);
+}
+.hotline b {
+  color: var(--warn);
+  font-family: var(--mono);
+}
+.hotline .spacer {
+  flex: 1;
 }

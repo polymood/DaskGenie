@@ -1,0 +1,26 @@
+name: Docs
+
+# Build the MkDocs site and publish it to the gh-pages branch (GitHub Pages).
+# Deploys only from main (i.e. on a release merge) or when run manually — never
+# from develop, so published docs always match a released state.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync docs deps
+        run: uv sync --group docs
+      - name: Build and deploy
+        run: uv run mkdocs gh-deploy --force

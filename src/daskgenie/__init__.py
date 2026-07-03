@@ -9,6 +9,8 @@ from daskgenie.graphcapture import (
 from daskgenie.local_profiler import LocalProfiler
 from daskgenie.report import create_run, upload_graph
 
+__version__ = "0.1.0"
+
 __all__ = [
     "SourceLocation",
     "GraphInfo",
@@ -19,4 +21,5 @@ __all__ = [
     "LocalProfiler",
     "upload_graph",
     "create_run",
+    "__version__",
 ]

@@ -8,7 +8,7 @@ import os
 import uvicorn
 
 from daskgenie.collector.app import create_app
-from daskgenie.collector.store import Store
+from daskgenie.collector.store import make_store
 
 
 def main() -> None:
@@ -16,13 +16,18 @@ def main() -> None:
     parser.add_argument(
         "--db",
         default=os.environ.get("DASKGENIE_DB", "daskgenie.db"),
-        help="SQLite file (or :memory:)",
+        help="SQLite file (or :memory:); ignored when DASKGENIE_DSN is set",
+    )
+    parser.add_argument(
+        "--dsn",
+        default=os.environ.get("DASKGENIE_DSN"),
+        help="Postgres/TimescaleDB DSN; selects the Timescale backend when set",
     )
     parser.add_argument("--host", default=os.environ.get("DASKGENIE_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("DASKGENIE_PORT", "8765")))
     args = parser.parse_args()
 
-    app = create_app(Store(args.db))
+    app = create_app(make_store(args.dsn, args.db))
     uvicorn.run(app, host=args.host, port=args.port)
 
 
