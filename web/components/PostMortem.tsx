@@ -1,8 +1,9 @@
 "use client";
 
-import { useDeaths, useGraph } from "@/lib/api";
+import { useGraph } from "@/lib/api";
+import { useLive } from "@/lib/live";
 import { bytes, layerToken, shortKey } from "@/lib/format";
-import type { ChunkMeta, GraphLayer } from "@/lib/types";
+import type { AllocationSite, ChunkMeta, GraphLayer } from "@/lib/types";
 import { CodeLine } from "./CodeLine";
 
 function sourceFor(key: string, layers: GraphLayer[]): GraphLayer | undefined {
@@ -23,14 +24,31 @@ function Chunks({ chunks }: { chunks: ChunkMeta[] }) {
   );
 }
 
+// The deep-memory cause: the exact source lines at the high-water mark when the
+// worker died — the "line 42 allocated 12.8 GB" answer above the chunk view.
+function Sites({ sites }: { sites: AllocationSite[] }) {
+  if (sites.length === 0) return null;
+  return (
+    <div className="dsites">
+      <div className="dsites-label">At the high-water mark:</div>
+      {sites.slice(0, 5).map((s, i) => (
+        <div className="dsite" key={i}>
+          <span className="mono">
+            {s.filename.split("/").slice(-1)[0]}:{s.lineno} {s.function}
+          </span>
+          <b>{bytes(s.hwm_bytes)}</b>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function PostMortem({ runId }: { runId: string }) {
-  const { data: deaths, isLoading } = useDeaths(runId);
+  const { deaths } = useLive();
   const { data: graph } = useGraph(runId);
   const layers = graph?.layers ?? [];
 
-  if (isLoading) return <div className="spinner">Loading…</div>;
-
-  const relevant = (deaths ?? []).filter((d) => d.suspect_keys.length > 0);
+  const relevant = deaths.filter((d) => d.suspect_keys.length > 0);
   if (relevant.length === 0)
     return (
       <div className="empty">
@@ -55,6 +73,7 @@ export function PostMortem({ runId }: { runId: string }) {
             <span className="worker">{d.worker}</span>
           </div>
           <div className="reason">{d.reason}</div>
+          <Sites sites={d.suspect_sites ?? []} />
           {d.suspect_keys.map((key) => {
             const src = sourceFor(key, layers);
             const chunks = d.suspect_chunks.filter((c) => c.task_key === key);

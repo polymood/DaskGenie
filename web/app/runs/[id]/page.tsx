@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useDeaths, useGraph, useLayerStats, useRun, useTimeline } from "@/lib/api";
+import { useAllocSites, useGraph, useLayerStats, useRun } from "@/lib/api";
+import { useLive } from "@/lib/live";
 import { baseName, layerColorMap } from "@/lib/colors";
 import { bytes } from "@/lib/format";
 import { MemoryChart } from "@/components/MemoryChart";
@@ -10,17 +11,18 @@ import { useMemo } from "react";
 export default function OverviewPage({ params }: { params: { id: string } }) {
   const { id } = params;
   const { data: run } = useRun(id);
-  const { data: samples } = useTimeline(id);
-  const { data: deaths } = useDeaths(id);
+  const { samples, deaths } = useLive();
   const { data: graph } = useGraph(id);
   const { data: layerStats } = useLayerStats(id);
+  const { data: allocSites } = useAllocSites(id);
   const colorOf = useMemo(() => layerColorMap(), []);
 
-  const peak = Math.max(0, ...(samples ?? []).map((s) => s.rss_bytes));
-  const oom = (deaths ?? []).filter((d) => d.suspected_oom && d.suspect_keys.length > 0);
-  const times = (samples ?? []).map((s) => s.timestamp);
+  const peak = Math.max(0, ...samples.map((s) => s.rss_bytes));
+  const oom = deaths.filter((d) => d.suspected_oom && d.suspect_keys.length > 0);
+  const times = samples.map((s) => s.timestamp);
   const duration = times.length > 1 ? Math.max(...times) - Math.min(...times) : 0;
   const maxTotal = Math.max(1, ...(layerStats ?? []).map((l) => l.total_seconds));
+  const hotLine = (allocSites ?? [])[0];
 
   return (
     <>
@@ -52,15 +54,33 @@ export default function OverviewPage({ params }: { params: { id: string } }) {
         </div>
       )}
 
-      <div className="grid-2">
-        <div>
-          <div className="section-label">Memory over time</div>
-          {samples && samples.length > 0 ? (
-            <MemoryChart samples={samples} />
-          ) : (
-            <div className="empty">No memory samples yet.</div>
-          )}
+      {hotLine && (
+        <div className="hotline">
+          <span className="k">Hottest allocation</span>
+          <span className="mono v">
+            {hotLine.filename.split("/").slice(-1)[0]}:{hotLine.lineno} {hotLine.function}
+          </span>
+          <b>{bytes(hotLine.hwm_bytes)}</b>
+          <span className="spacer" />
+          <Link href={`/runs/${id}/memory`} style={{ color: "var(--accent)" }}>
+            Deep memory →
+          </Link>
         </div>
+      )}
+
+      <div className="section-label">
+        Memory over time ·{" "}
+        <Link href={`/runs/${id}/timeline`} style={{ color: "var(--accent)" }}>
+          open the Timeline to zoom & inspect spikes →
+        </Link>
+      </div>
+      {samples && samples.length > 0 ? (
+        <MemoryChart samples={samples} deaths={deaths} />
+      ) : (
+        <div className="empty">No memory samples yet.</div>
+      )}
+
+      <div style={{ marginTop: 20 }}>
         <div>
           <div className="section-label">
             Tasks by layer{duration ? ` · ${duration.toFixed(1)}s total` : ""}

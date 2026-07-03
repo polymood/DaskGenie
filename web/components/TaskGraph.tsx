@@ -12,17 +12,20 @@ import {
   Position,
   ReactFlow,
 } from "@xyflow/react";
-import { useMemo, useState } from "react";
-import { useChunks, useDeaths, useGraph } from "@/lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { useChunks, useGraph } from "@/lib/api";
+import { useLive } from "@/lib/live";
 import { baseName, layerColorMap } from "@/lib/colors";
 import { bytes, layerToken, shortKey } from "@/lib/format";
 import type { GraphData, GraphLayer } from "@/lib/types";
 import { CodeLine } from "./CodeLine";
+import { GraphCanvas, type CNode } from "./GraphCanvas";
 
 const NODE_W = 168;
 const NODE_H = 38;
-// Above this many task nodes we render the layer-level graph instead — a few
-// hundred nodes is the sweet spot for a readable, responsive DAG.
+// Above this many task nodes we switch from the interactive react-flow view to
+// the canvas DAG renderer, which draws the *whole* graph (thousands of nodes)
+// rather than collapsing to a layer summary.
 const TASK_LIMIT = 400;
 
 type NodeData = { label: string; layer: string; color: string; hot: boolean };
@@ -69,8 +72,17 @@ function laidOut(
   return { nodes, edges };
 }
 
-function build(graph: GraphData, hot: Set<string>, colorOf: (l: string) => string) {
-  const taskLevel = graph.nodes.length > 0 && graph.nodes.length <= TASK_LIMIT && !graph.truncated;
+function build(
+  graph: GraphData,
+  hot: Set<string>,
+  colorOf: (l: string) => string,
+  allowTaskLevel = true,
+) {
+  const taskLevel =
+    allowTaskLevel &&
+    graph.nodes.length > 0 &&
+    graph.nodes.length <= TASK_LIMIT &&
+    !graph.truncated;
   if (taskLevel) {
     const raw = graph.nodes.map((n) => ({
       id: n.key,
@@ -160,23 +172,50 @@ function SourcePanel({
 }
 
 export function TaskGraph({ runId }: { runId: string }) {
-  const { data: graph, isLoading } = useGraph(runId);
-  const { data: deaths } = useDeaths(runId);
+  const { data: graph, isLoading, mutate } = useGraph(runId);
+  const { deaths, graphNonce } = useLive();
   const [selected, setSelected] = useState<string | null>(null);
+  // For big graphs the readable default is the layer-level DAG; drilling into
+  // the full task canvas is opt-in (thousands of nodes is a hairball otherwise).
+  const [showTasks, setShowTasks] = useState(false);
+
+  // The graph is uploaded once the collection is known; refetch when the live
+  // stream signals a (re)upload landed.
+  useEffect(() => {
+    if (graphNonce > 0) mutate();
+  }, [graphNonce, mutate]);
 
   const hot = useMemo(
-    () => new Set((deaths ?? []).flatMap((d) => d.suspect_keys.map(layerToken))),
+    () => new Set(deaths.flatMap((d) => d.suspect_keys.map(layerToken))),
     [deaths],
   );
 
   const colorOf = useMemo(() => layerColorMap(), []);
 
+  const hasTasks = !!graph && graph.nodes.length > 0 && !graph.truncated;
+  const large = !!graph && graph.nodes.length > TASK_LIMIT && !graph.truncated;
+  // Show the full task canvas only for small graphs, or when the user opts in.
+  const useCanvas = hasTasks && (large ? showTasks : false);
+  const useTaskReactFlow = hasTasks && !large; // small graph → interactive task view
+
+  const canvasNodes = useMemo<CNode[]>(() => {
+    if (!graph || !useCanvas) return [];
+    return graph.nodes.map((n) => ({
+      id: n.key,
+      label: shortKey(n.key),
+      layer: n.layer,
+      color: colorOf(n.layer),
+      hot: [...hot].some((t) => n.key.includes(t) || layerToken(n.key).startsWith(t)),
+    }));
+  }, [graph, useCanvas, hot, colorOf]);
+
+  // react-flow path: the interactive task view (small graphs) or the layer DAG.
   const { nodes, edges, taskLevel } = useMemo(
     () =>
-      graph
-        ? build(graph, hot, colorOf)
+      graph && !useCanvas
+        ? build(graph, hot, colorOf, useTaskReactFlow)
         : { nodes: [] as Node[], edges: [] as Edge[], taskLevel: false },
-    [graph, hot, colorOf],
+    [graph, useCanvas, useTaskReactFlow, hot, colorOf],
   );
 
   if (isLoading) return <div className="spinner">Loading…</div>;
@@ -191,40 +230,68 @@ export function TaskGraph({ runId }: { runId: string }) {
 
   const layerOf = new Map(graph.nodes.map((n) => [n.key, n.layer]));
   const sourceOf = new Map(graph.layers.map((l) => [l.layer, l]));
-  const selLayer = selected ? (taskLevel ? layerOf.get(selected) ?? "" : selected) : "";
+  const selTaskLevel = useCanvas || taskLevel;
+  const selLayer = selected ? (selTaskLevel ? layerOf.get(selected) ?? "" : selected) : "";
+
+  const note = useCanvas
+    ? `${graph.task_count} tasks · full task graph`
+    : taskLevel
+      ? `${graph.task_count} tasks · task-level graph`
+      : `${graph.task_count} tasks · grouped by layer (${
+          graph.layers.length || new Set(graph.nodes.map((n) => n.layer)).size
+        } layers)`;
 
   return (
     <>
       <div className="graph-note">
-        {graph.task_count} tasks ·{" "}
-        {taskLevel ? "task-level graph" : "layer-level graph (too large for task view)"} · click a
-        node for its source
+        {note} · click a node for its source
+        {large && (
+          <button
+            className="btn"
+            style={{ marginLeft: 12 }}
+            onClick={() => {
+              setSelected(null);
+              setShowTasks((v) => !v);
+            }}
+          >
+            {showTasks ? "← Group by layer" : `Show all ${graph.task_count} tasks →`}
+          </button>
+        )}
       </div>
       <div className="graph-split">
-        <div className="rf-wrap" style={{ flex: 1 }}>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            fitView
-            minZoom={0.1}
-            proOptions={{ hideAttribution: true }}
-            nodesDraggable={false}
-            nodesConnectable={false}
-            onNodeClick={(_e, node) => setSelected(node.id)}
-          >
-            <Background color="#e6e8ec" gap={22} />
-            <Controls showInteractive={false} />
-            <MiniMap pannable zoomable nodeColor={(n) => (n.data as NodeData).color} />
-          </ReactFlow>
-        </div>
+        {useCanvas ? (
+          <GraphCanvas
+            nodes={canvasNodes}
+            edges={graph.edges}
+            selected={selected}
+            onSelect={setSelected}
+          />
+        ) : (
+          <div className="rf-wrap" style={{ flex: 1 }}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              fitView
+              minZoom={0.1}
+              proOptions={{ hideAttribution: true }}
+              nodesDraggable={false}
+              nodesConnectable={false}
+              onNodeClick={(_e, node) => setSelected(node.id)}
+            >
+              <Background color="#e6e8ec" gap={22} />
+              <Controls showInteractive={false} />
+              <MiniMap pannable zoomable nodeColor={(n) => (n.data as NodeData).color} />
+            </ReactFlow>
+          </div>
+        )}
         {selected && (
           <SourcePanel
             runId={runId}
             selected={selected}
             layer={selLayer}
             source={sourceOf.get(selLayer)}
-            taskLevel={taskLevel}
+            taskLevel={selTaskLevel}
             onClose={() => setSelected(null)}
           />
         )}
