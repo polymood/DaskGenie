@@ -31,9 +31,7 @@ def blowup(block: np.ndarray) -> float:
 def main() -> None:
     import dask.array as da
 
-    cluster = LocalCluster(
-        n_workers=2, threads_per_worker=1, processes=True, memory_limit="1500MB"
-    )
+    cluster = LocalCluster(n_workers=2, threads_per_worker=1, processes=True, memory_limit="1500MB")
     client = Client(cluster)
     try:
         run_id = genie.register(client, COLLECTOR, run_name="rechunk OOM", flush_interval=0.1)

@@ -21,6 +21,8 @@ def register(
     run_name: str = "",
     sample_interval: float = 0.2,
     flush_interval: float = 0.5,
+    deep: bool = False,
+    deep_epoch_seconds: float = 5.0,
 ) -> str:
     """Open a run and install both profiler plugins on the cluster.
 
@@ -31,6 +33,12 @@ def register(
     ``flush_interval`` bounds how long chunk metadata can sit unsent on a
     worker; keep it well under how fast your workers OOM, or the killer chunk's
     metadata dies with the process before it is pushed.
+
+    ``deep=True`` enables the memray-backed deep memory engine on each worker:
+    per-source-line high-water-mark attribution rotated every
+    ``deep_epoch_seconds``. It costs ~1.5-2x runtime and needs the ``deep``
+    extra (memray, Linux/macOS + CPython); where memray isn't importable the
+    worker silently degrades to the always-on Tier-1 sampling.
     """
     run_id = create_run(collector_url, run_name)
     client.register_plugin(
@@ -39,6 +47,8 @@ def register(
             run_id,
             sample_interval=sample_interval,
             flush_interval=flush_interval,
+            deep=deep,
+            deep_epoch_seconds=deep_epoch_seconds,
         )
     )
     client.register_plugin(DeathAttributionPlugin(collector_url, run_id))

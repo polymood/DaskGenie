@@ -57,13 +57,23 @@ _ORIGINAL_DESCRIPTOR = HighLevelGraph.__dict__["from_collections"]
 _original_from_collections: Callable[..., HighLevelGraph] = _ORIGINAL_DESCRIPTOR.__func__
 
 
-def _is_library_frame(filename: str) -> bool:
+def is_library_frame(filename: str, extra_library_paths: Sequence[str] = ()) -> bool:
+    """True if ``filename`` is library code (dask/numpy/site-packages/...) rather
+    than the user's own source. Shared by graph source-attribution and the deep
+    memory engine (which folds memray stacks to the first *user* frame).
+    """
     parts = Path(filename).parts
     if "site-packages" in parts or "dist-packages" in parts:
         return True
     if any(module in parts for module in _DEFAULT_LIBRARY_MODULES):
         return True
-    return any(extra in filename for extra in _extra_library_paths)
+    if any(extra in filename for extra in _extra_library_paths):
+        return True
+    return any(extra in filename for extra in extra_library_paths)
+
+
+def _is_library_frame(filename: str) -> bool:
+    return is_library_frame(filename)
 
 
 def _find_user_frame() -> FrameType | None:
@@ -77,13 +87,44 @@ def _find_user_frame() -> FrameType | None:
     return None
 
 
+def _read_statement(filename: str, lineno: int, max_lines: int = 8, max_chars: int = 240) -> str:
+    """The full logical statement at ``lineno``, not just its first physical
+    line — a call split across lines (``map_overlap(\\n  ...,\\n)``) would
+    otherwise be captured as a bare ``x = x.map_overlap(``. Follows bracket
+    depth across continuation lines and collapses them into one readable line.
+    """
+    parts: list[str] = []
+    depth = 0
+    opened = False
+    for i in range(lineno, lineno + max_lines):
+        raw = linecache.getline(filename, i)
+        if not raw:
+            break
+        parts.append(raw.strip())
+        for ch in raw:
+            if ch in "([{":
+                depth += 1
+                opened = True
+            elif ch in ")]}":
+                depth -= 1
+        text = " ".join(p for p in parts if p)
+        if len(text) >= max_chars:
+            break
+        # stop once brackets balance (or the first line had none at all)
+        if depth <= 0:
+            break
+        if not opened:
+            break
+    return " ".join(p for p in parts if p)[:max_chars]
+
+
 def _capture_source_location() -> SourceLocation | None:
     frame = _find_user_frame()
     if frame is None:
         return None
     filename = frame.f_code.co_filename
     lineno = frame.f_lineno
-    snippet = linecache.getline(filename, lineno).strip()
+    snippet = _read_statement(filename, lineno)
     return SourceLocation(filename=filename, lineno=lineno, code_snippet=snippet)
 
 

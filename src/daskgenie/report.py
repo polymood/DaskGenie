@@ -6,6 +6,7 @@ callback profiler use these, so neither drags in the other's deps.
 from __future__ import annotations
 
 import json
+import socket
 import urllib.request
 from collections.abc import Mapping, Sequence
 
@@ -25,8 +26,13 @@ def _post(url: str, payload: bytes, *, timeout: float = 10.0) -> bytes:
 
 
 def create_run(collector_url: str, name: str = "") -> str:
-    """Open a run on the collector and return its id."""
-    body = json.dumps({"name": name}).encode("utf-8")
+    """Open a run on the collector and return its id. Tags the run with this
+    machine's hostname so a shared dashboard shows where each run came from."""
+    try:
+        origin = socket.gethostname()
+    except Exception:  # noqa: BLE001
+        origin = ""
+    body = json.dumps({"name": name, "origin": origin}).encode("utf-8")
     raw = _post(f"{collector_url.rstrip('/')}/api/runs", body)
     return str(json.loads(raw)["id"])
 

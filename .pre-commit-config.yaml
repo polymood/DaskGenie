@@ -1,0 +1,22 @@
+# Run `uv run pre-commit install` once, then these run on every commit.
+# Local/system hooks use the project's own pinned tool versions via uv, so
+# there's no drift between pre-commit and CI.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+      - id: ruff
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src/
+        language: system
+        types: [python]
+        pass_filenames: false

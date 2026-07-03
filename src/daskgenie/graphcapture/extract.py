@@ -37,9 +37,11 @@ def _layer_of(key: object) -> str:
     return str(key[0]) if isinstance(key, tuple) and key else str(key)
 
 
-def extract_task_graph(collection: object, *, max_nodes: int = 3000) -> TaskGraph:
+def extract_task_graph(collection: object, *, max_nodes: int = 8000) -> TaskGraph:
     """Build the full task graph from a collection, capped so a huge graph can't
-    blow up the payload or the browser — callers fall back to the layer view.
+    blow up the payload or the browser. The dashboard renders task graphs up to
+    this size on a pan/zoom canvas; above it, callers fall back to the layer
+    view (``truncated=True``).
     """
     from daskgenie.common.arrays import key_str
 
@@ -51,10 +53,7 @@ def extract_task_graph(collection: object, *, max_nodes: int = 3000) -> TaskGrap
     flat = dict(dask_graph)
     nodes = [(key_str(k), _layer_of(k)) for k in flat]
     edges = [
-        (key_str(dep), key_str(k))
-        for k in flat
-        for dep in get_dependencies(flat, k)
-        if dep in flat
+        (key_str(dep), key_str(k)) for k in flat for dep in get_dependencies(flat, k) if dep in flat
     ]
     return TaskGraph(nodes=nodes, edges=edges, task_count=count, truncated=False)
 

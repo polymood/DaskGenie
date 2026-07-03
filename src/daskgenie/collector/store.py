@@ -23,9 +23,10 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from daskgenie.common.schemas import (
+    AllocationSite,
     ChunkMeta,
     DeathEvent,
     GraphUpload,
@@ -34,11 +35,58 @@ from daskgenie.common.schemas import (
     SampleBatch,
 )
 
+
+class StoreProtocol(Protocol):
+    """The storage contract shared by the SQLite :class:`Store` (tests/dev) and
+    the Postgres/Timescale ``TimescaleStore`` (default in Docker). ``create_app``
+    is typed against this so it stays backend-agnostic.
+    """
+
+    def create_run(self, name: str = ..., origin: str = ..., origin_ip: str = ...) -> RunInfo: ...
+    def ensure_run(self, run_id: str) -> None: ...
+    def list_runs(self) -> list[RunInfo]: ...
+    def get_run(self, run_id: str) -> RunInfo | None: ...
+    def delete_run(self, run_id: str) -> bool: ...
+    def add_samples(self, batch: SampleBatch) -> None: ...
+    def add_graph(self, upload: GraphUpload) -> None: ...
+    def add_death(self, event: DeathEvent) -> None: ...
+    def timeline(
+        self, run_id: str, worker: str | None = ..., limit: int = ...
+    ) -> list[dict[str, Any]]: ...
+    def chunks_for(self, run_id: str, task_key: str) -> list[ChunkMeta]: ...
+    def sites_for(self, run_id: str, task_key: str) -> list[AllocationSite]: ...
+    def alloc_sites(
+        self,
+        run_id: str,
+        limit: int = ...,
+        start: float | None = ...,
+        end: float | None = ...,
+    ) -> list[dict[str, Any]]: ...
+    def flamegraph(
+        self,
+        run_id: str,
+        worker: str | None = ...,
+        start: float | None = ...,
+        end: float | None = ...,
+        limit: int = ...,
+    ) -> dict[str, Any]: ...
+    def task_memory(self, run_id: str, limit: int = ...) -> list[dict[str, Any]]: ...
+    def alloc_timeline(self, run_id: str) -> list[dict[str, Any]]: ...
+    def worker_status(self, run_id: str) -> list[dict[str, Any]]: ...
+    def graph(self, run_id: str) -> dict[str, Any]: ...
+    def deaths(self, run_id: str) -> list[dict[str, Any]]: ...
+    def spans(self, run_id: str, limit: int = ...) -> list[dict[str, Any]]: ...
+    def layer_stats(self, run_id: str) -> list[dict[str, Any]]: ...
+    def latest_memory_by_worker(self) -> dict[str, MemorySample]: ...
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    origin TEXT NOT NULL DEFAULT '',
+    origin_ip TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS samples (
@@ -106,6 +154,7 @@ CREATE TABLE IF NOT EXISTS deaths (
     worker TEXT NOT NULL,
     suspect_keys TEXT NOT NULL,
     suspect_chunks TEXT NOT NULL,
+    suspect_sites TEXT NOT NULL DEFAULT '[]',
     suspected_oom INTEGER NOT NULL,
     reason TEXT NOT NULL
 );
@@ -121,7 +170,79 @@ CREATE TABLE IF NOT EXISTS task_spans (
     worker TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_spans_run_start ON task_spans(run_id, start);
+
+-- One row per (memray epoch, hot source line). ``ts`` is the epoch end; a line
+-- appears once per epoch it was live in, so the peak-per-line query takes the
+-- MAX(hwm_bytes) across epochs, not a sum (epochs are disjoint time windows).
+CREATE TABLE IF NOT EXISTS alloc_sites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    worker TEXT NOT NULL,
+    ts REAL NOT NULL,
+    filename TEXT NOT NULL,
+    lineno INTEGER NOT NULL,
+    function TEXT NOT NULL,
+    hwm_bytes INTEGER NOT NULL,
+    n_allocations INTEGER NOT NULL,
+    task_key TEXT NOT NULL,
+    layer TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alloc_run ON alloc_sites(run_id);
+CREATE INDEX IF NOT EXISTS idx_alloc_run_task ON alloc_sites(run_id, task_key);
+
+CREATE TABLE IF NOT EXISTS task_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    layer TEXT NOT NULL,
+    worker TEXT NOT NULL,
+    peak_rss_delta INTEGER NOT NULL,
+    top_sites TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_taskmem_run ON task_memory(run_id);
+
+CREATE TABLE IF NOT EXISTS worker_status (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    worker TEXT NOT NULL,
+    timestamp REAL NOT NULL,
+    rss_bytes INTEGER NOT NULL,
+    managed_bytes INTEGER NOT NULL,
+    memory_limit INTEGER NOT NULL,
+    cpu REAL NOT NULL,
+    nthreads INTEGER NOT NULL,
+    executing INTEGER NOT NULL,
+    ready INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wstatus_run_worker_ts ON worker_status(run_id, worker, timestamp);
+
+-- One row per (epoch, unique call stack): the full root->leaf frames as JSON
+-- plus the high-water-mark bytes, for the per-worker flamegraph / tree.
+CREATE TABLE IF NOT EXISTS alloc_stacks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    worker TEXT NOT NULL,
+    ts REAL NOT NULL,
+    frames TEXT NOT NULL,
+    hwm_bytes INTEGER NOT NULL,
+    n_allocations INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_stacks_run_worker ON alloc_stacks(run_id, worker);
 """
+
+
+def make_store(dsn: str | None = None, db: str | Path = "daskgenie.db") -> StoreProtocol:
+    """Pick the collector backend. A Postgres/Timescale ``dsn`` (from
+    ``DASKGENIE_DSN``) selects :class:`TimescaleStore` — the default in Docker;
+    otherwise the self-contained SQLite :class:`Store`, which is also what the
+    test suite uses (``:memory:``). psycopg is imported lazily so SQLite-only
+    installs don't need it.
+    """
+    if dsn:
+        from daskgenie.collector.store_tsdb import TimescaleStore
+
+        return TimescaleStore(dsn)
+    return Store(db)
 
 
 class Store:
@@ -132,6 +253,14 @@ class Store:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # Migrate DBs created before origin tracking existed.
+            for col in ("origin", "origin_ip"):
+                try:
+                    self._conn.execute(
+                        f"ALTER TABLE runs ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # column already exists
             self._conn.commit()
 
     def close(self) -> None:
@@ -140,17 +269,17 @@ class Store:
 
     # -- runs ---------------------------------------------------------------
 
-    def create_run(self, name: str = "") -> RunInfo:
+    def create_run(self, name: str = "", origin: str = "", origin_ip: str = "") -> RunInfo:
         run_id = uuid.uuid4().hex[:12]
         created = time.time()
         name = name or f"run-{run_id}"
         with self._lock:
             self._conn.execute(
-                "INSERT INTO runs (id, name, created_at) VALUES (?, ?, ?)",
-                (run_id, name, created),
+                "INSERT INTO runs (id, name, created_at, origin, origin_ip) VALUES (?, ?, ?, ?, ?)",
+                (run_id, name, created, origin, origin_ip),
             )
             self._conn.commit()
-        return RunInfo(id=run_id, name=name, created_at=created)
+        return RunInfo(id=run_id, name=name, created_at=created, origin=origin, origin_ip=origin_ip)
 
     def ensure_run(self, run_id: str) -> None:
         """Create a placeholder run row if data arrives for an unknown run_id.
@@ -167,7 +296,7 @@ class Store:
     def list_runs(self) -> list[RunInfo]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, name, created_at FROM runs ORDER BY created_at DESC"
+                "SELECT id, name, created_at, origin, origin_ip FROM runs ORDER BY created_at DESC"
             ).fetchall()
             runs = []
             for r in rows:
@@ -181,14 +310,22 @@ class Store:
                     ),
                 }
                 runs.append(
-                    RunInfo(id=r["id"], name=r["name"], created_at=r["created_at"], counts=counts)
+                    RunInfo(
+                        id=r["id"],
+                        name=r["name"],
+                        created_at=r["created_at"],
+                        origin=r["origin"],
+                        origin_ip=r["origin_ip"],
+                        counts=counts,
+                    )
                 )
         return runs
 
     def get_run(self, run_id: str) -> RunInfo | None:
         with self._lock:
             r = self._conn.execute(
-                "SELECT id, name, created_at FROM runs WHERE id = ?", (run_id,)
+                "SELECT id, name, created_at, origin, origin_ip FROM runs WHERE id = ?",
+                (run_id,),
             ).fetchone()
             if r is None:
                 return None
@@ -199,7 +336,14 @@ class Store:
                     "SELECT COUNT(DISTINCT worker) FROM samples WHERE run_id = ?", run_id
                 ),
             }
-        return RunInfo(id=r["id"], name=r["name"], created_at=r["created_at"], counts=counts)
+        return RunInfo(
+            id=r["id"],
+            name=r["name"],
+            created_at=r["created_at"],
+            origin=r["origin"],
+            origin_ip=r["origin_ip"],
+            counts=counts,
+        )
 
     def delete_run(self, run_id: str) -> bool:
         with self._lock:
@@ -214,6 +358,10 @@ class Store:
                 "graph_meta",
                 "deaths",
                 "task_spans",
+                "alloc_sites",
+                "alloc_stacks",
+                "task_memory",
+                "worker_status",
             ):
                 self._conn.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))  # noqa: S608
             self._conn.commit()
@@ -253,9 +401,77 @@ class Store:
             self._conn.executemany(
                 "INSERT INTO task_spans (run_id, key, layer, start, end, worker) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
+                [(batch.run_id, s.key, s.layer, s.start, s.end, s.worker) for s in batch.spans],
+            )
+            self._conn.executemany(
+                "INSERT INTO alloc_sites (run_id, worker, ts, filename, lineno, function, "
+                "hwm_bytes, n_allocations, task_key, layer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (batch.run_id, s.key, s.layer, s.start, s.end, s.worker)
-                    for s in batch.spans
+                    (
+                        batch.run_id,
+                        ep.worker,
+                        ep.end,
+                        site.filename,
+                        site.lineno,
+                        site.function,
+                        site.hwm_bytes,
+                        site.n_allocations,
+                        site.task_key,
+                        site.layer,
+                    )
+                    for ep in batch.epochs
+                    for site in ep.sites
+                ],
+            )
+            self._conn.executemany(
+                "INSERT INTO alloc_stacks (run_id, worker, ts, frames, hwm_bytes, n_allocations) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        batch.run_id,
+                        ep.worker,
+                        ep.end,
+                        json.dumps([[f.function, f.filename, f.lineno] for f in st.frames]),
+                        st.hwm_bytes,
+                        st.n_allocations,
+                    )
+                    for ep in batch.epochs
+                    for st in ep.stacks
+                ],
+            )
+            self._conn.executemany(
+                "INSERT INTO task_memory (run_id, key, layer, worker, peak_rss_delta, top_sites) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        batch.run_id,
+                        tm.key,
+                        tm.layer,
+                        tm.worker,
+                        tm.peak_rss_delta,
+                        json.dumps([s.model_dump() for s in tm.top_sites]),
+                    )
+                    for tm in batch.task_memory
+                ],
+            )
+            self._conn.executemany(
+                "INSERT INTO worker_status (run_id, worker, timestamp, rss_bytes, managed_bytes, "
+                "memory_limit, cpu, nthreads, executing, ready) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        batch.run_id,
+                        st.worker,
+                        st.timestamp,
+                        st.rss_bytes,
+                        st.managed_bytes,
+                        st.memory_limit,
+                        st.cpu,
+                        st.nthreads,
+                        st.executing,
+                        st.ready,
+                    )
+                    for st in batch.statuses
                 ],
             )
             self._conn.commit()
@@ -305,13 +521,14 @@ class Store:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO deaths (run_id, timestamp, worker, suspect_keys, suspect_chunks, "
-                "suspected_oom, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "suspect_sites, suspected_oom, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     event.run_id,
                     event.timestamp,
                     event.worker,
                     json.dumps(event.suspect_keys),
                     json.dumps([c.model_dump() for c in event.suspect_chunks]),
+                    json.dumps([s.model_dump() for s in event.suspect_sites]),
                     int(event.suspected_oom),
                     event.reason,
                 ),
@@ -365,6 +582,172 @@ class Store:
             for r in rows
         ]
 
+    def sites_for(self, run_id: str, task_key: str) -> list[AllocationSite]:
+        """Deep allocation lines recorded for a task — the peak (MAX) per line
+        across the epochs that overlapped it. Feeds the death-site join.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT filename, lineno, function, MAX(hwm_bytes) AS hwm, "
+                "SUM(n_allocations) AS na, task_key, layer FROM alloc_sites "
+                "WHERE run_id = ? AND task_key = ? "
+                "GROUP BY filename, lineno, function ORDER BY hwm DESC",
+                (run_id, task_key),
+            ).fetchall()
+        return [
+            AllocationSite(
+                filename=r["filename"],
+                lineno=r["lineno"],
+                function=r["function"],
+                hwm_bytes=r["hwm"],
+                n_allocations=r["na"] or 0,
+                task_key=r["task_key"],
+                layer=r["layer"],
+            )
+            for r in rows
+        ]
+
+    def alloc_sites(
+        self,
+        run_id: str,
+        limit: int = 500,
+        start: float | None = None,
+        end: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-source-line deep memory, peak bytes descending — the headline of
+        the deep Memory view. Peak = MAX(hwm_bytes) across epochs (disjoint
+        windows), so a line held across time isn't double-counted. A ``start``/
+        ``end`` window scopes it to a moment (what was allocating at a spike).
+        """
+        clauses = ["run_id = ?"]
+        params: list[Any] = [run_id]
+        if start is not None:
+            clauses.append("ts >= ?")
+            params.append(start)
+        if end is not None:
+            clauses.append("ts <= ?")
+            params.append(end)
+        where = " AND ".join(clauses)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT filename, lineno, function, MAX(hwm_bytes) AS hwm, "  # noqa: S608
+                "SUM(n_allocations) AS na, "
+                f"GROUP_CONCAT(DISTINCT layer) AS layers FROM alloc_sites WHERE {where} "
+                "GROUP BY filename, lineno, function ORDER BY hwm DESC LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        return [
+            {
+                "filename": r["filename"],
+                "lineno": r["lineno"],
+                "function": r["function"],
+                "hwm_bytes": r["hwm"],
+                "n_allocations": r["na"] or 0,
+                "layers": [x for x in (r["layers"] or "").split(",") if x],
+            }
+            for r in rows
+        ]
+
+    def flamegraph(
+        self,
+        run_id: str,
+        worker: str | None = None,
+        start: float | None = None,
+        end: float | None = None,
+        limit: int = 400,
+    ) -> dict[str, Any]:
+        """Per-unique-call-stack peak bytes for the flamegraph. Peak = MAX across
+        epochs (disjoint windows) of the same stack. Optionally scoped to one
+        worker and/or a time window (the "over time" selector).
+        """
+        clauses = ["run_id = ?"]
+        params: list[Any] = [run_id]
+        if worker:
+            clauses.append("worker = ?")
+            params.append(worker)
+        if start is not None:
+            clauses.append("ts >= ?")
+            params.append(start)
+        if end is not None:
+            clauses.append("ts <= ?")
+            params.append(end)
+        where = " AND ".join(clauses)
+        with self._lock:
+            workers = [
+                r[0]
+                for r in self._conn.execute(
+                    "SELECT DISTINCT worker FROM alloc_stacks WHERE run_id = ? ORDER BY worker",
+                    (run_id,),
+                ).fetchall()
+            ]
+            rows = self._conn.execute(
+                f"SELECT frames, MAX(hwm_bytes) AS hwm, SUM(n_allocations) AS na "  # noqa: S608
+                f"FROM alloc_stacks WHERE {where} GROUP BY frames ORDER BY hwm DESC LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        stacks = [
+            {
+                "frames": [
+                    {"function": f[0], "filename": f[1], "lineno": f[2]}
+                    for f in json.loads(r["frames"])
+                ],
+                "hwm_bytes": r["hwm"],
+                "n_allocations": r["na"] or 0,
+            }
+            for r in rows
+        ]
+        return {"workers": workers, "stacks": stacks}
+
+    def alloc_timeline(self, run_id: str) -> list[dict[str, Any]]:
+        """Per-(epoch, layer) high-water-mark bytes — a memory-over-time series
+        grouped by task layer, so you can see which layer's memory grows when.
+        Rows with no layer attribution are bucketed as ``(unattributed)``.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts, layer, SUM(hwm_bytes) AS bytes FROM alloc_sites "
+                "WHERE run_id = ? GROUP BY ts, layer ORDER BY ts",
+                (run_id,),
+            ).fetchall()
+        return [
+            {"ts": r["ts"], "layer": r["layer"] or "(unattributed)", "bytes": r["bytes"]}
+            for r in rows
+        ]
+
+    def task_memory(self, run_id: str, limit: int = 2000) -> list[dict[str, Any]]:
+        """Per-task peak RSS delta + dominant allocation lines, largest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT key, layer, worker, MAX(peak_rss_delta) AS peak, top_sites "
+                "FROM task_memory WHERE run_id = ? GROUP BY key "
+                "ORDER BY peak DESC LIMIT ?",
+                (run_id, limit),
+            ).fetchall()
+        return [
+            {
+                "key": r["key"],
+                "layer": r["layer"],
+                "worker": r["worker"],
+                "peak_rss_delta": r["peak"],
+                "top_sites": json.loads(r["top_sites"]),
+            }
+            for r in rows
+        ]
+
+    def worker_status(self, run_id: str) -> list[dict[str, Any]]:
+        """The most recent heartbeat per worker — the live Workers table."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT s.worker, s.timestamp, s.rss_bytes, s.managed_bytes, s.memory_limit, "
+                "s.cpu, s.nthreads, s.executing, s.ready FROM worker_status s "
+                "JOIN (SELECT worker, MAX(timestamp) AS mt FROM worker_status "
+                "WHERE run_id = ? GROUP BY worker) m "
+                "ON s.worker = m.worker AND s.timestamp = m.mt WHERE s.run_id = ? "
+                "ORDER BY s.worker",
+                (run_id, run_id),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def graph(self, run_id: str) -> dict[str, Any]:
         with self._lock:
             layers = self._conn.execute(
@@ -400,8 +783,8 @@ class Store:
     def deaths(self, run_id: str) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT timestamp, worker, suspect_keys, suspect_chunks, suspected_oom, "
-                "reason FROM deaths WHERE run_id = ? ORDER BY timestamp DESC",
+                "SELECT timestamp, worker, suspect_keys, suspect_chunks, suspect_sites, "
+                "suspected_oom, reason FROM deaths WHERE run_id = ? ORDER BY timestamp DESC",
                 (run_id,),
             ).fetchall()
         return [
@@ -410,6 +793,7 @@ class Store:
                 "worker": r["worker"],
                 "suspect_keys": json.loads(r["suspect_keys"]),
                 "suspect_chunks": json.loads(r["suspect_chunks"]),
+                "suspect_sites": json.loads(r["suspect_sites"]),
                 "suspected_oom": bool(r["suspected_oom"]),
                 "reason": r["reason"],
             }
