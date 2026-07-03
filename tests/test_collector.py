@@ -6,12 +6,16 @@ from daskgenie.collector.app import create_app
 from daskgenie.collector.store import Store
 from daskgenie.common.schemas import (
     SCHEMA_VERSION,
+    AllocationSite,
     ChunkMeta,
     DeathEvent,
     GraphLayer,
     GraphUpload,
+    MemoryEpoch,
     MemorySample,
     SampleBatch,
+    TaskMemory,
+    WorkerStatus,
 )
 
 RUN = "run1"
@@ -199,3 +203,129 @@ def test_death_event_is_enriched_with_stored_chunk_metadata() -> None:
     assert len(death["suspect_chunks"]) == 1
     assert death["suspect_chunks"][0]["nbytes"] == 512_000_000
     assert death["suspect_chunks"][0]["task_key"] == "rechunk-merge-1"
+
+
+def test_worker_status_returns_latest_per_worker() -> None:
+    client = _client()
+    for ts, cpu in [(1.0, 10.0), (2.0, 55.0)]:
+        client.post(
+            "/ingest/samples",
+            json=SampleBatch(
+                run_id=RUN,
+                worker="tcp://w1",
+                statuses=[
+                    WorkerStatus(
+                        worker="tcp://w1",
+                        timestamp=ts,
+                        rss_bytes=int(ts),
+                        managed_bytes=0,
+                        memory_limit=1000,
+                        cpu=cpu,
+                        nthreads=4,
+                        executing=2,
+                        ready=3,
+                    )
+                ],
+            ).model_dump(),
+        )
+    workers = client.get(f"/api/runs/{RUN}/workers").json()
+    assert len(workers) == 1
+    assert workers[0]["cpu"] == 55.0  # most recent heartbeat wins
+    assert workers[0]["executing"] == 2
+
+
+def test_alloc_sites_peak_per_line_across_epochs() -> None:
+    client = _client()
+    site = lambda hwm: AllocationSite(  # noqa: E731
+        filename="job.py", lineno=42, function="build", hwm_bytes=hwm, n_allocations=1
+    )
+    client.post(
+        "/ingest/samples",
+        json=SampleBatch(
+            run_id=RUN,
+            worker="w1",
+            epochs=[
+                MemoryEpoch(worker="w1", start=0.0, end=1.0, peak_rss=100, sites=[site(100)]),
+                MemoryEpoch(worker="w1", start=1.0, end=2.0, peak_rss=300, sites=[site(300)]),
+            ],
+        ).model_dump(),
+    )
+    sites = client.get(f"/api/runs/{RUN}/alloc-sites").json()
+    assert len(sites) == 1
+    # peak across disjoint epochs is the MAX, not the sum
+    assert sites[0]["hwm_bytes"] == 300
+    assert sites[0]["lineno"] == 42
+
+
+def test_task_memory_roundtrip() -> None:
+    client = _client()
+    client.post(
+        "/ingest/samples",
+        json=SampleBatch(
+            run_id=RUN,
+            worker="w1",
+            task_memory=[
+                TaskMemory(
+                    key="build-0",
+                    layer="build",
+                    worker="w1",
+                    peak_rss_delta=128_000_000,
+                    top_sites=[
+                        AllocationSite(
+                            filename="job.py", lineno=7, function="build", hwm_bytes=128_000_000
+                        )
+                    ],
+                )
+            ],
+        ).model_dump(),
+    )
+    tm = client.get(f"/api/runs/{RUN}/task-memory").json()
+    assert tm[0]["key"] == "build-0"
+    assert tm[0]["peak_rss_delta"] == 128_000_000
+    assert tm[0]["top_sites"][0]["lineno"] == 7
+
+
+def test_death_enriched_with_alloc_sites() -> None:
+    """The deep engine records which line was at the high-water mark per task;
+    a death join surfaces it as the cause, alongside the chunk view.
+    """
+    client = _client()
+    client.post(
+        "/ingest/samples",
+        json=SampleBatch(
+            run_id=RUN,
+            worker="tcp://w1",
+            epochs=[
+                MemoryEpoch(
+                    worker="tcp://w1",
+                    start=0.0,
+                    end=1.0,
+                    peak_rss=8_000_000_000,
+                    sites=[
+                        AllocationSite(
+                            filename="job.py",
+                            lineno=42,
+                            function="build",
+                            hwm_bytes=8_000_000_000,
+                            task_key="build-0",
+                            layer="build",
+                        )
+                    ],
+                )
+            ],
+        ).model_dump(),
+    )
+    client.post(
+        "/ingest/death",
+        json=DeathEvent(
+            run_id=RUN,
+            timestamp=1.0,
+            worker="tcp://w1",
+            suspect_keys=["build-0"],
+            suspected_oom=True,
+        ).model_dump(),
+    )
+    death = client.get(f"/api/runs/{RUN}/deaths").json()[0]
+    assert len(death["suspect_sites"]) == 1
+    assert death["suspect_sites"][0]["lineno"] == 42
+    assert death["suspect_sites"][0]["hwm_bytes"] == 8_000_000_000
