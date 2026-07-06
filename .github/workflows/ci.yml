@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 jobs:
@@ -35,5 +35,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm ci
+      # npm ci is strict about platform-specific optional deps in the lockfile;
+      # fall back to npm install (as the Docker build does) if they drift.
+      - run: npm ci || npm install
       - run: npm run build
