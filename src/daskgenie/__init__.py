@@ -9,7 +9,7 @@ from daskgenie.graphcapture import (
 from daskgenie.local_profiler import LocalProfiler
 from daskgenie.report import create_run, upload_graph
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 __all__ = [
     "SourceLocation",

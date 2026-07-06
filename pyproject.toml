@@ -1,6 +1,6 @@
 [project]
 name = "daskgenie"
-version = "0.1.0"
+version = "0.1.2"
 description = "A code-to-graph-to-memory profiler for Dask: know which chunk killed a worker and what source line produced it."
 readme = "README.md"
 requires-python = ">=3.11"

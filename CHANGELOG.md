@@ -6,7 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.1.0]
+## [0.1.2] - 2026-07-06
+
+First cleanly-published release. (`0.1.0` was an early upload and `0.1.1` a failed
+publish before the version was bumped; `0.1.2` is the stable packaging of the
+features below.)
 
 ### Added
 
@@ -29,5 +33,5 @@ adheres to [Semantic Versioning](https://semver.org/).
   `dask.dataframe`, `dask.bag`, xarray on Zarr and NetCDF).
 - Packaging (PyPI metadata, MIT license), CI, and release workflows.
 
-[Unreleased]: https://github.com/polymood/DaskGenie/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/polymood/DaskGenie/releases/tag/v0.1.0
+[Unreleased]: https://github.com/polymood/DaskGenie/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/polymood/DaskGenie/releases/tag/v0.1.2
